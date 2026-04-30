@@ -1,521 +1,345 @@
 import streamlit as st
 import pandas as pd
+import numpy as np
 import matplotlib.pyplot as plt
+import seaborn as sns
 import re
+import pickle
 import os
-import joblib
-
-from nltk.stem import PorterStemmer
-
 from sklearn.model_selection import train_test_split
 from sklearn.feature_extraction.text import TfidfVectorizer
 from sklearn.linear_model import LogisticRegression
-from sklearn.svm import SVC
+from sklearn.naive_bayes import MultinomialNB
+from sklearn.svm import LinearSVC
 from sklearn.metrics import (
-    accuracy_score,
-    precision_score,
-    recall_score,
-    f1_score,
-    confusion_matrix
+    classification_report, confusion_matrix,
+    accuracy_score, f1_score
 )
+from sklearn.pipeline import Pipeline
 
-# ======================================
-# PAGE CONFIG
-# ======================================
+# ── Page config ────────────────────────────────────────────────────────────────
 st.set_page_config(
-    page_title="Stress Detection NLP",
+    page_title="NLP Emotion & Sentiment Analyzer",
     page_icon="🧠",
-    layout="wide"
+    layout="wide",
+    initial_sidebar_state="expanded",
 )
 
-# ======================================
-# CUSTOM CSS
-# ======================================
-st.markdown("""
-<style>
-[data-testid="stSidebar"]{
-    background-color:#111827;
+# ── Constants ──────────────────────────────────────────────────────────────────
+DATA_DIR   = "data"
+MODELS_DIR = "models"
+EMOTION_CSV  = os.path.join(DATA_DIR, "emotion_accuracy_training.csv")
+SENTIMENT_CSV = os.path.join(DATA_DIR, "ugm_fess_labeled.csv")
+
+EMOTION_LABEL_MAP = {
+    "anger": "😡 Anger",
+    "happy": "😊 Happy",
+    "sadness": "😢 Sadness",
+    "fear": "😨 Fear",
+    "love": "❤️ Love",
 }
-h1,h2,h3{
-    color:#2563EB;
-}
-.stButton>button{
-    width:100%;
-    border-radius:10px;
-}
-</style>
-""", unsafe_allow_html=True)
+SENTIMENT_LABEL_MAP = {0: "😐 Netral", 1: "😊 Positif", 2: "😢 Negatif"}
+SENTIMENT_COLOR_MAP = {0: "#9E9E9E", 1: "#4CAF50", 2: "#F44336"}
 
-# ======================================
-# SESSION STATE
-# ======================================
-if "page" not in st.session_state:
-    st.session_state.page = "Home"
+os.makedirs(MODELS_DIR, exist_ok=True)
 
-if "model" not in st.session_state:
-    st.session_state.model = None
-
-if "vectorizer" not in st.session_state:
-    st.session_state.vectorizer = None
-
-if "results" not in st.session_state:
-    st.session_state.results = None
-
-if "processed_df" not in st.session_state:
-    st.session_state.processed_df = None
-
-stemmer = PorterStemmer()
-
-# ======================================
-# TEXT CLEANING
-# ======================================
-def clean_text(text):
+# ── Text cleaning ──────────────────────────────────────────────────────────────
+def clean_text(text: str) -> str:
     text = str(text).lower()
+    text = re.sub(r"http\S+|www\S+", " ", text)          # URLs
+    text = re.sub(r"@\w+|#\w+", " ", text)               # mentions / hashtags
+    text = re.sub(r"[^a-zA-Z\sÀ-ÿ]", " ", text)         # keep letters only
+    text = re.sub(r"\s+", " ", text).strip()
+    return text
 
-    text = re.sub(r"http\S+", "", text)
-    text = re.sub(r"@\w+", "", text)
-    text = re.sub(r"#\w+", "", text)
-    text = re.sub(r"[^a-zA-Z\s]", "", text)
+# ── Data loaders ───────────────────────────────────────────────────────────────
+@st.cache_data(show_spinner=False)
+def load_emotion_data():
+    df = pd.read_csv(EMOTION_CSV)
+    df.columns = df.columns.str.strip()
+    df = df.dropna(subset=["label", "tweet"])
+    df["text_clean"] = df["tweet"].apply(clean_text)
+    return df
 
-    tokens = text.split()
-    tokens = [stemmer.stem(word) for word in tokens]
+@st.cache_data(show_spinner=False)
+def load_sentiment_data():
+    df = pd.read_csv(SENTIMENT_CSV)
+    df.columns = df.columns.str.strip()
+    label_col = [c for c in df.columns if "label" in c.lower()][0]
+    df = df.rename(columns={label_col: "label_raw"})
+    df["label"] = df["label_raw"].astype(str).str.extract(r"^(\d+)").astype(float)
+    df = df.dropna(subset=["label", "full_text"])
+    df["label"] = df["label"].astype(int)
+    df["text_clean"] = df["full_text"].apply(clean_text)
+    return df
 
-    return " ".join(tokens)
-
-# ======================================
-# LOAD DATASETS
-# ======================================
-@st.cache_data
-def load_datasets():
-
-    emotion_path = "data/emotion_accuracy_training.csv"
-    stress_path = "data/ugm_fess_labeled.csv"
-
-    # cek file
-    if not os.path.exists(emotion_path):
-        st.error(f"File tidak ditemukan: {emotion_path}")
-        st.stop()
-
-    if not os.path.exists(stress_path):
-        st.error(f"File tidak ditemukan: {stress_path}")
-        st.stop()
-
-    # =========================
-    # emotion dataset
-    # =========================
-    emotion_df = pd.read_csv(
-        emotion_path,
-        sep=None,
-        engine="python"
-    )
-
-    emotion_df.columns = (
-        emotion_df.columns
-        .str.strip()
-        .str.replace(";", "", regex=False)
-    )
-
-    # support tweet/text
-    if "tweet" in emotion_df.columns:
-        emotion_df = emotion_df.rename(
-            columns={"tweet": "text"}
-        )
-
-    if "text" not in emotion_df.columns:
-        st.error(
-            f"Kolom text tidak ditemukan pada emotion dataset: {emotion_df.columns.tolist()}"
-        )
-        st.stop()
-
-    # =========================
-    # stress dataset
-    # =========================
-    stress_df = pd.read_csv(
-        stress_path,
-        sep=None,
-        engine="python"
-    )
-
-    stress_df.columns = (
-        stress_df.columns
-        .str.strip()
-        .str.replace(";", "", regex=False)
-    )
-
-    # support full_text/text
-    if "full_text" in stress_df.columns:
-        stress_df = stress_df.rename(
-            columns={"full_text": "text"}
-        )
-
-    if "text" not in stress_df.columns:
-        st.error(
-            f"Kolom text tidak ditemukan pada stress dataset: {stress_df.columns.tolist()}"
-        )
-        st.stop()
-
-    # cari label otomatis
-    label_col = None
-    for col in stress_df.columns:
-        if "label" in col.lower():
-            label_col = col
-            break
-
-    if label_col is None:
-        st.error(
-            f"Kolom label tidak ditemukan: {stress_df.columns.tolist()}"
-        )
-        st.stop()
-
-    stress_df = stress_df.rename(
-        columns={label_col: "label"}
-    )
-
-    # convert label
-    stress_df["label"] = pd.to_numeric(
-        stress_df["label"],
-        errors="coerce"
-    )
-
-    # hapus null
-    stress_df = stress_df.dropna(
-        subset=["text", "label"]
-    )
-
-    stress_df["label"] = stress_df[
-        "label"
-    ].astype(int)
-
-    return emotion_df, stress_df
-
-
-# LOAD DATA
-emotion_df, stress_df = load_datasets()
-
-# ======================================
-# SIDEBAR
-# ======================================
-with st.sidebar:
-
-    st.title("🧠 Stress Level App")
-
-    pages = [
-        "Home",
-        "Dataset Overview",
-        "Preprocessing",
-        "Model Training",
-        "Evaluation",
-        "Prediction"
-    ]
-
-    for p in pages:
-        if st.button(p):
-            st.session_state.page = p
-            st.rerun()
-
-# ======================================
-# HOME
-# ======================================
-if st.session_state.page == "Home":
-
-    st.title("Stress Level Detection")
-
-    st.write(
-        "Deteksi tingkat stress pengguna media sosial menggunakan NLP"
-    )
-
-    c1, c2 = st.columns(2)
-
-    c1.metric(
-        "Stress Dataset",
-        len(stress_df)
-    )
-
-    c2.metric(
-        "Emotion Dataset",
-        len(emotion_df)
-    )
-
-# ======================================
-# DATASET OVERVIEW
-# ======================================
-elif st.session_state.page == "Dataset Overview":
-
-    st.title("Dataset Overview")
-
-    tab1, tab2 = st.tabs([
-        "Stress Dataset",
-        "Emotion Dataset"
+# ── Model training ─────────────────────────────────────────────────────────────
+def build_pipeline(model_name: str):
+    models = {
+        "Logistic Regression": LogisticRegression(max_iter=1000, C=1.0, random_state=42),
+        "Naive Bayes":         MultinomialNB(alpha=0.5),
+        "Linear SVM":          LinearSVC(max_iter=2000, C=1.0, random_state=42),
+    }
+    return Pipeline([
+        ("tfidf", TfidfVectorizer(ngram_range=(1, 2), max_features=30000, sublinear_tf=True)),
+        ("clf",   models[model_name]),
     ])
 
-    with tab1:
-        st.subheader("Stress Dataset")
-        st.dataframe(stress_df.head())
-
-    with tab2:
-        st.subheader("Emotion Dataset")
-        st.dataframe(emotion_df.head())
-
-# ======================================
-# PREPROCESSING
-# ======================================
-elif st.session_state.page == "Preprocessing":
-
-    st.title("Text Preprocessing")
-
-    processed_df = stress_df.copy()
-
-    processed_df["clean_text"] = processed_df[
-        "text"
-    ].apply(clean_text)
-
-    st.session_state.processed_df = processed_df
-
-    st.success("Preprocessing selesai")
-
-    preview = pd.DataFrame({
-        "Original Text": processed_df[
-            "text"
-        ].head(10),
-        "Clean Text": processed_df[
-            "clean_text"
-        ].head(10)
-    })
-
-    st.dataframe(
-        preview,
-        use_container_width=True
-    )
-
-# ======================================
-# MODEL TRAINING
-# ======================================
-elif st.session_state.page == "Model Training":
-
-    st.title("Train Model")
-
-    model_choice = st.selectbox(
-        "Choose Model",
-        [
-            "Logistic Regression",
-            "SVM"
-        ]
-    )
-
-    # gunakan hasil preprocessing kalau ada
-    if st.session_state.processed_df is not None:
-        df = st.session_state.processed_df
-    else:
-        df = stress_df.copy()
-        df["clean_text"] = df["text"].apply(
-            clean_text
-        )
-
-    X = df["clean_text"]
-    y = df["label"]
-
+@st.cache_resource(show_spinner=False)
+def train_model(task: str, model_name: str, test_size: float, _df):
+    X = _df["text_clean"]
+    y = _df["label"]
     X_train, X_test, y_train, y_test = train_test_split(
-        X,
-        y,
-        test_size=0.2,
-        random_state=42
+        X, y, test_size=test_size, random_state=42, stratify=y
     )
+    pipe = build_pipeline(model_name)
+    pipe.fit(X_train, y_train)
+    y_pred = pipe.predict(X_test)
 
-    vectorizer = TfidfVectorizer(
-        max_features=5000
-    )
+    acc  = accuracy_score(y_test, y_pred)
+    f1   = f1_score(y_test, y_pred, average="weighted")
+    cm   = confusion_matrix(y_test, y_pred)
+    report = classification_report(y_test, y_pred, output_dict=True)
 
-    X_train_vec = vectorizer.fit_transform(
-        X_train
-    )
+    model_path = os.path.join(MODELS_DIR, f"{task}_{model_name.replace(' ', '_')}.pkl")
+    with open(model_path, "wb") as f:
+        pickle.dump(pipe, f)
 
-    X_test_vec = vectorizer.transform(
-        X_test
-    )
+    return pipe, acc, f1, cm, report, y_test, y_pred
 
-    if st.button("Train Model"):
+# ── Visualisation helpers ──────────────────────────────────────────────────────
+def plot_label_distribution(df, label_col, label_map, title):
+    counts = df[label_col].value_counts().sort_index()
+    labels = [label_map.get(k, str(k)) for k in counts.index]
+    fig, ax = plt.subplots(figsize=(7, 4))
+    colors = plt.cm.Set2(np.linspace(0, 1, len(counts)))
+    bars = ax.bar(labels, counts.values, color=colors, edgecolor="white", linewidth=0.8)
+    ax.bar_label(bars, fmt="%d", padding=3, fontsize=9)
+    ax.set_title(title, fontsize=13, fontweight="bold", pad=10)
+    ax.set_ylabel("Jumlah Sampel")
+    ax.spines[["top", "right"]].set_visible(False)
+    plt.xticks(rotation=20, ha="right")
+    plt.tight_layout()
+    return fig
 
-        if model_choice == "Logistic Regression":
-            model = LogisticRegression(
-                max_iter=1000
-            )
-        else:
-            model = SVC()
+def plot_confusion_matrix(cm, class_names, title):
+    fig, ax = plt.subplots(figsize=(6, 5))
+    sns.heatmap(cm, annot=True, fmt="d", cmap="Blues",
+                xticklabels=class_names, yticklabels=class_names,
+                linewidths=0.5, ax=ax, cbar=False)
+    ax.set_xlabel("Predicted Label", fontsize=11)
+    ax.set_ylabel("True Label", fontsize=11)
+    ax.set_title(title, fontsize=13, fontweight="bold", pad=10)
+    plt.tight_layout()
+    return fig
 
-        model.fit(
-            X_train_vec,
-            y_train
-        )
+def plot_class_metrics(report, class_names):
+    rows = []
+    for name in class_names:
+        key = str(name)
+        if key in report:
+            rows.append({
+                "Class": name, "Precision": report[key]["precision"],
+                "Recall": report[key]["recall"], "F1-Score": report[key]["f1-score"],
+            })
+    metrics_df = pd.DataFrame(rows).set_index("Class")
+    fig, ax = plt.subplots(figsize=(8, 4))
+    x = np.arange(len(metrics_df))
+    w = 0.25
+    ax.bar(x - w, metrics_df["Precision"], w, label="Precision", color="#42A5F5")
+    ax.bar(x,     metrics_df["Recall"],    w, label="Recall",    color="#66BB6A")
+    ax.bar(x + w, metrics_df["F1-Score"],  w, label="F1-Score",  color="#FFA726")
+    ax.set_xticks(x)
+    ax.set_xticklabels(metrics_df.index, rotation=15, ha="right")
+    ax.set_ylim(0, 1.1)
+    ax.set_ylabel("Score")
+    ax.set_title("Per-Class Metrics", fontsize=12, fontweight="bold")
+    ax.legend(loc="lower right", fontsize=9)
+    ax.spines[["top", "right"]].set_visible(False)
+    plt.tight_layout()
+    return fig
 
-        y_pred = model.predict(
-            X_test_vec
-        )
+# ── Sidebar ────────────────────────────────────────────────────────────────────
+st.sidebar.title("⚙️ Konfigurasi")
+task = st.sidebar.radio(
+    "📌 Pilih Task",
+    ["Emotion Detection", "Sentiment Analysis"],
+    help="Emotion: 5 kelas emosi | Sentiment: 3 kelas sentimen UGM FESS",
+)
+model_name = st.sidebar.selectbox(
+    "🤖 Pilih Model",
+    ["Logistic Regression", "Naive Bayes", "Linear SVM"],
+)
+test_size = st.sidebar.slider(
+    "🔀 Test Size (%)", min_value=10, max_value=40, value=20, step=5
+) / 100
 
-        acc = accuracy_score(
-            y_test,
-            y_pred
-        )
+st.sidebar.markdown("---")
+st.sidebar.info(
+    "**Dataset**\n"
+    "- Emotion: 4 401 tweet berlabel emosi\n"
+    "- Sentiment: ~31 800 post UGM FESS (0=Netral, 1=Positif, 2=Negatif)\n\n"
+    "**Pipeline**: TF-IDF (bigram, 30k fitur) → Classifier"
+)
 
-        prec = precision_score(
-            y_test,
-            y_pred,
-            average="weighted"
-        )
+# ── Main ───────────────────────────────────────────────────────────────────────
+st.title("🧠 NLP Emotion & Sentiment Analyzer")
+st.caption("Deteksi emosi dan sentimen teks Bahasa Indonesia menggunakan Machine Learning")
 
-        rec = recall_score(
-            y_test,
-            y_pred,
-            average="weighted"
-        )
+tab_eda, tab_train, tab_predict = st.tabs(["📊 Eksplorasi Data", "🏋️ Training & Evaluasi", "🔮 Prediksi"])
 
-        f1 = f1_score(
-            y_test,
-            y_pred,
-            average="weighted"
-        )
+# ── Tab 1 : EDA ────────────────────────────────────────────────────────────────
+with tab_eda:
+    st.subheader("Eksplorasi Dataset")
 
-        st.session_state.model = model
-        st.session_state.vectorizer = vectorizer
-
-        st.session_state.results = {
-            "accuracy": acc,
-            "precision": prec,
-            "recall": rec,
-            "f1": f1,
-            "y_test": y_test,
-            "y_pred": y_pred
-        }
-
-        os.makedirs(
-            "models",
-            exist_ok=True
-        )
-
-        joblib.dump(
-            model,
-            "models/stress_model.pkl"
-        )
-
-        joblib.dump(
-            vectorizer,
-            "models/tfidf.pkl"
-        )
-
-        st.success(
-            "Model berhasil dilatih"
-        )
-
-# ======================================
-# EVALUATION
-# ======================================
-elif st.session_state.page == "Evaluation":
-
-    st.title("Model Evaluation")
-
-    if st.session_state.results:
-
-        result = st.session_state.results
-
-        c1, c2, c3, c4 = st.columns(4)
-
-        c1.metric(
-            "Accuracy",
-            round(result["accuracy"], 4)
-        )
-
-        c2.metric(
-            "Precision",
-            round(result["precision"], 4)
-        )
-
-        c3.metric(
-            "Recall",
-            round(result["recall"], 4)
-        )
-
-        c4.metric(
-            "F1 Score",
-            round(result["f1"], 4)
-        )
-
-        cm = confusion_matrix(
-            result["y_test"],
-            result["y_pred"]
-        )
-
-        fig, ax = plt.subplots()
-
-        ax.imshow(cm)
-
-        ax.set_title(
-            "Confusion Matrix"
-        )
-
-        st.pyplot(fig)
-
+    if task == "Emotion Detection":
+        with st.spinner("Memuat data emosi…"):
+            df = load_emotion_data()
+        label_map = EMOTION_LABEL_MAP
+        label_col = "label"
+        text_col  = "tweet"
     else:
-        st.warning(
-            "Train model terlebih dahulu"
-        )
+        with st.spinner("Memuat data sentimen…"):
+            df = load_sentiment_data()
+        label_map = SENTIMENT_LABEL_MAP
+        label_col = "label"
+        text_col  = "full_text"
 
-# ======================================
-# PREDICTION
-# ======================================
-elif st.session_state.page == "Prediction":
+    c1, c2, c3 = st.columns(3)
+    c1.metric("Total Sampel", f"{len(df):,}")
+    c2.metric("Jumlah Kelas", df[label_col].nunique())
+    c3.metric("Avg. Panjang Teks (kata)", int(df[text_col].str.split().str.len().mean()))
 
-    st.title("Stress Prediction")
+    st.markdown("#### Distribusi Label")
+    fig_dist = plot_label_distribution(df, label_col, label_map, f"Distribusi Label – {task}")
+    st.pyplot(fig_dist, use_container_width=True)
 
-    user_text = st.text_area(
-        "Masukkan teks sosial media"
+    st.markdown("#### Contoh Data")
+    sample_label = st.selectbox(
+        "Filter label",
+        ["Semua"] + [label_map.get(k, str(k)) for k in sorted(df[label_col].unique())],
     )
+    if sample_label == "Semua":
+        show_df = df.sample(min(10, len(df)), random_state=1)
+    else:
+        inv_map = {v: k for k, v in label_map.items()}
+        sel_key = inv_map.get(sample_label, sample_label)
+        show_df = df[df[label_col] == sel_key].sample(min(10, (df[label_col] == sel_key).sum()), random_state=1)
 
-    if st.button("Predict"):
+    disp = show_df[[text_col, label_col]].copy()
+    disp[label_col] = disp[label_col].map(lambda x: label_map.get(x, str(x)))
+    st.dataframe(disp.rename(columns={text_col: "Teks", label_col: "Label"}), use_container_width=True, height=280)
 
-        if st.session_state.model is None:
+# ── Tab 2 : Training ───────────────────────────────────────────────────────────
+with tab_train:
+    st.subheader(f"Training – {task} | Model: {model_name}")
 
-            if os.path.exists(
-                "models/stress_model.pkl"
-            ):
-                st.session_state.model = joblib.load(
-                    "models/stress_model.pkl"
-                )
+    if task == "Emotion Detection":
+        df_train = load_emotion_data()
+        label_map = EMOTION_LABEL_MAP
+        class_names = list(df_train["label"].unique())
+    else:
+        df_train = load_sentiment_data()
+        label_map = SENTIMENT_LABEL_MAP
+        class_names = sorted(df_train["label"].unique())
 
-                st.session_state.vectorizer = joblib.load(
-                    "models/tfidf.pkl"
-                )
-            else:
-                st.warning(
-                    "Train model terlebih dahulu"
-                )
-                st.stop()
+    if st.button("🚀 Mulai Training", use_container_width=True):
+        with st.spinner(f"Training {model_name} pada {task}…"):
+            pipe, acc, f1, cm, report, y_test, y_pred = train_model(
+                task, model_name, test_size, df_train
+            )
 
-        clean_input = clean_text(
-            user_text
-        )
+        st.success("✅ Training selesai!")
+        m1, m2 = st.columns(2)
+        m1.metric("Accuracy", f"{acc:.4f}")
+        m2.metric("F1-Score (weighted)", f"{f1:.4f}")
 
-        vectorized = st.session_state.vectorizer.transform(
-            [clean_input]
-        )
+        col_cm, col_cls = st.columns(2)
+        with col_cm:
+            class_display = [label_map.get(k, str(k)) for k in sorted(set(y_test))]
+            fig_cm = plot_confusion_matrix(cm, class_display, "Confusion Matrix")
+            st.pyplot(fig_cm, use_container_width=True)
+        with col_cls:
+            fig_cls = plot_class_metrics(report, sorted(set(y_test)))
+            st.pyplot(fig_cls, use_container_width=True)
 
-        prediction = st.session_state.model.predict(
-            vectorized
-        )[0]
+        st.markdown("#### Classification Report")
+        rep_rows = []
+        for k, v in report.items():
+            if isinstance(v, dict):
+                rep_rows.append({"Class": label_map.get(k, k), **{m: round(v[m], 4) for m in ["precision", "recall", "f1-score", "support"]}})
+        st.dataframe(pd.DataFrame(rep_rows), use_container_width=True, hide_index=True)
 
-        if prediction == 0:
-            result = "Normal 😌"
-        elif prediction == 1:
-            result = "Mild Stress 😥"
+        st.info(f"💾 Model disimpan di `{MODELS_DIR}/`")
+    else:
+        st.info("Klik tombol **Mulai Training** untuk melatih model dengan konfigurasi yang dipilih di sidebar.")
+
+# ── Tab 3 : Predict ────────────────────────────────────────────────────────────
+with tab_predict:
+    st.subheader("🔮 Prediksi Teks Baru")
+
+    model_path = os.path.join(MODELS_DIR, f"{task}_{model_name.replace(' ', '_')}.pkl")
+
+    if not os.path.exists(model_path):
+        st.warning("⚠️ Model belum dilatih. Silakan ke tab **Training & Evaluasi** dan latih model terlebih dahulu.")
+    else:
+        with open(model_path, "rb") as f:
+            loaded_model = pickle.load(f)
+
+        if task == "Emotion Detection":
+            label_map = EMOTION_LABEL_MAP
         else:
-            result = "High Stress 😫"
+            label_map = SENTIMENT_LABEL_MAP
 
-        st.success(
-            f"Prediction: {result}"
+        st.markdown("#### Prediksi Satu Teks")
+        user_text = st.text_area(
+            "Masukkan teks di sini:",
+            placeholder="Contoh: Aku sangat bahagia hari ini karena mendapat kabar gembira!",
+            height=100,
         )
 
-        st.subheader(
-            "Processed Text"
-        )
+        if st.button("🔍 Prediksi", use_container_width=True):
+            if user_text.strip():
+                cleaned = clean_text(user_text)
+                pred = loaded_model.predict([cleaned])[0]
+                label_display = label_map.get(pred, str(pred))
+                st.success(f"**Hasil Prediksi:** {label_display}")
 
-        st.write(
-            clean_input
-        )
+                # show probabilities if available
+                if hasattr(loaded_model, "predict_proba"):
+                    probs = loaded_model.predict_proba([cleaned])[0]
+                    classes = loaded_model.classes_
+                    prob_df = pd.DataFrame({
+                        "Label": [label_map.get(c, str(c)) for c in classes],
+                        "Probabilitas": probs,
+                    }).sort_values("Probabilitas", ascending=False)
+                    fig_prob, ax = plt.subplots(figsize=(6, 3))
+                    colors_p = ["#1565C0" if c == pred else "#90CAF9" for c in classes]
+                    bars = ax.barh(
+                        [label_map.get(c, str(c)) for c in classes],
+                        probs, color=colors_p
+                    )
+                    ax.bar_label(bars, fmt="%.3f", padding=3, fontsize=9)
+                    ax.set_xlim(0, 1.1)
+                    ax.set_xlabel("Probabilitas")
+                    ax.set_title("Distribusi Probabilitas", fontsize=11, fontweight="bold")
+                    ax.spines[["top", "right"]].set_visible(False)
+                    plt.tight_layout()
+                    st.pyplot(fig_prob, use_container_width=True)
+            else:
+                st.warning("Masukkan teks terlebih dahulu.")
+
+        st.markdown("---")
+        st.markdown("#### Prediksi Batch (CSV)")
+        uploaded = st.file_uploader("Upload CSV dengan kolom `text`", type=["csv"])
+        if uploaded:
+            batch_df = pd.read_csv(uploaded)
+            if "text" not in batch_df.columns:
+                st.error("CSV harus memiliki kolom bernama **text**.")
+            else:
+                batch_df["text_clean"] = batch_df["text"].apply(clean_text)
+                batch_df["prediksi"]   = loaded_model.predict(batch_df["text_clean"])
+                batch_df["label"]      = batch_df["prediksi"].map(lambda x: label_map.get(x, str(x)))
+                st.dataframe(batch_df[["text", "label"]], use_container_width=True)
+                csv_out = batch_df[["text", "label"]].to_csv(index=False).encode("utf-8")
+                st.download_button("⬇️ Download Hasil", csv_out, "hasil_prediksi.csv", "text/csv")
