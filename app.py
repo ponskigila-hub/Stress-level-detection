@@ -5,6 +5,8 @@ import re
 import os
 import joblib
 
+from nltk.stem import PorterStemmer
+
 from sklearn.model_selection import train_test_split
 from sklearn.feature_extraction.text import TfidfVectorizer
 from sklearn.linear_model import LogisticRegression
@@ -17,9 +19,6 @@ from sklearn.metrics import (
     confusion_matrix
 )
 
-from nltk.stem import PorterStemmer
-
-
 # ======================================
 # PAGE CONFIG
 # ======================================
@@ -30,7 +29,7 @@ st.set_page_config(
 )
 
 # ======================================
-# CSS
+# CUSTOM CSS
 # ======================================
 st.markdown("""
 <style>
@@ -42,12 +41,13 @@ h1,h2,h3{
 }
 .stButton>button{
     width:100%;
+    border-radius:10px;
 }
 </style>
 """, unsafe_allow_html=True)
 
 # ======================================
-# SESSION
+# SESSION STATE
 # ======================================
 if "page" not in st.session_state:
     st.session_state.page = "Home"
@@ -61,11 +61,13 @@ if "vectorizer" not in st.session_state:
 if "results" not in st.session_state:
     st.session_state.results = None
 
+if "processed_df" not in st.session_state:
+    st.session_state.processed_df = None
+
 stemmer = PorterStemmer()
 
-
 # ======================================
-# CLEAN TEXT
+# TEXT CLEANING
 # ======================================
 def clean_text(text):
     text = str(text).lower()
@@ -80,29 +82,16 @@ def clean_text(text):
 
     return " ".join(tokens)
 
-
-# ======================================
-# NORMALIZE COLUMN
-# ======================================
-def normalize_columns(df):
-    df.columns = (
-        df.columns
-        .str.strip()
-        .str.replace(";", "", regex=False)
-    )
-    return df
-
-
 # ======================================
 # LOAD DATASETS
 # ======================================
 @st.cache_data
 def load_datasets():
 
-    # cek file exists
     emotion_path = "data/emotion_accuracy_training.csv"
     stress_path = "data/ugm_fess_labeled.csv"
 
+    # cek file
     if not os.path.exists(emotion_path):
         st.error(f"File tidak ditemukan: {emotion_path}")
         st.stop()
@@ -111,19 +100,14 @@ def load_datasets():
         st.error(f"File tidak ditemukan: {stress_path}")
         st.stop()
 
-    # ==========================
-    # LOAD EMOTION DATASET
-    # ==========================
-    try:
-        emotion_df = pd.read_csv(
-            emotion_path,
-            encoding="utf-8"
-        )
-    except:
-        emotion_df = pd.read_csv(
-            emotion_path,
-            encoding="latin1"
-        )
+    # =========================
+    # emotion dataset
+    # =========================
+    emotion_df = pd.read_csv(
+        emotion_path,
+        sep=None,
+        engine="python"
+    )
 
     emotion_df.columns = (
         emotion_df.columns
@@ -131,7 +115,7 @@ def load_datasets():
         .str.replace(";", "", regex=False)
     )
 
-    # support text/tweet
+    # support tweet/text
     if "tweet" in emotion_df.columns:
         emotion_df = emotion_df.rename(
             columns={"tweet": "text"}
@@ -139,22 +123,18 @@ def load_datasets():
 
     if "text" not in emotion_df.columns:
         st.error(
-            f"Emotion dataset tidak punya kolom text. Kolom: {emotion_df.columns.tolist()}"
+            f"Kolom text tidak ditemukan pada emotion dataset: {emotion_df.columns.tolist()}"
         )
         st.stop()
 
-    # ==========================
-    # LOAD STRESS DATASET
-    # ==========================
-    try:
-        stress_df = pd.read_csv(
-            stress_path,
-            sep=";"
-        )
-    except:
-        stress_df = pd.read_csv(
-            stress_path
-        )
+    # =========================
+    # stress dataset
+    # =========================
+    stress_df = pd.read_csv(
+        stress_path,
+        sep=None,
+        engine="python"
+    )
 
     stress_df.columns = (
         stress_df.columns
@@ -162,48 +142,42 @@ def load_datasets():
         .str.replace(";", "", regex=False)
     )
 
-    # debug lihat kolom
-    st.write("Detected Stress Columns:")
-    st.write(stress_df.columns.tolist())
-
-    # rename full_text -> text
+    # support full_text/text
     if "full_text" in stress_df.columns:
         stress_df = stress_df.rename(
-            columns={
-                "full_text": "text"
-            }
+            columns={"full_text": "text"}
         )
 
-    # cari label column otomatis
+    if "text" not in stress_df.columns:
+        st.error(
+            f"Kolom text tidak ditemukan pada stress dataset: {stress_df.columns.tolist()}"
+        )
+        st.stop()
+
+    # cari label otomatis
     label_col = None
     for col in stress_df.columns:
         if "label" in col.lower():
             label_col = col
             break
 
-    if "text" not in stress_df.columns:
-        st.error(
-            f"Kolom text tidak ditemukan. Kolom: {stress_df.columns.tolist()}"
-        )
-        st.stop()
-
     if label_col is None:
         st.error(
-            f"Kolom label tidak ditemukan. Kolom: {stress_df.columns.tolist()}"
+            f"Kolom label tidak ditemukan: {stress_df.columns.tolist()}"
         )
         st.stop()
 
     stress_df = stress_df.rename(
-        columns={
-            label_col: "label"
-        }
+        columns={label_col: "label"}
     )
 
+    # convert label
     stress_df["label"] = pd.to_numeric(
         stress_df["label"],
         errors="coerce"
     )
 
+    # hapus null
     stress_df = stress_df.dropna(
         subset=["text", "label"]
     )
@@ -213,6 +187,9 @@ def load_datasets():
     ].astype(int)
 
     return emotion_df, stress_df
+
+
+# LOAD DATA
 emotion_df, stress_df = load_datasets()
 
 # ======================================
@@ -235,7 +212,6 @@ with st.sidebar:
         if st.button(p):
             st.session_state.page = p
             st.rerun()
-
 
 # ======================================
 # HOME
@@ -260,7 +236,6 @@ if st.session_state.page == "Home":
         len(emotion_df)
     )
 
-
 # ======================================
 # DATASET OVERVIEW
 # ======================================
@@ -274,11 +249,12 @@ elif st.session_state.page == "Dataset Overview":
     ])
 
     with tab1:
+        st.subheader("Stress Dataset")
         st.dataframe(stress_df.head())
 
     with tab2:
+        st.subheader("Emotion Dataset")
         st.dataframe(emotion_df.head())
-
 
 # ======================================
 # PREPROCESSING
@@ -287,24 +263,29 @@ elif st.session_state.page == "Preprocessing":
 
     st.title("Text Preprocessing")
 
-    st.write("Dataset columns:")
-    st.write(stress_df.columns.tolist())
+    processed_df = stress_df.copy()
 
-    stress_df["clean_text"] = stress_df[
+    processed_df["clean_text"] = processed_df[
         "text"
     ].apply(clean_text)
+
+    st.session_state.processed_df = processed_df
 
     st.success("Preprocessing selesai")
 
     preview = pd.DataFrame({
-        "Original": stress_df["text"].head(10),
-        "Processed": stress_df["clean_text"].head(10)
+        "Original Text": processed_df[
+            "text"
+        ].head(10),
+        "Clean Text": processed_df[
+            "clean_text"
+        ].head(10)
     })
 
-    st.dataframe(preview)
-
-    st.session_state.processed_df = stress_df
-
+    st.dataframe(
+        preview,
+        use_container_width=True
+    )
 
 # ======================================
 # MODEL TRAINING
@@ -321,13 +302,14 @@ elif st.session_state.page == "Model Training":
         ]
     )
 
-    if "processed_df" in st.session_state:
+    # gunakan hasil preprocessing kalau ada
+    if st.session_state.processed_df is not None:
         df = st.session_state.processed_df
     else:
-        stress_df["clean_text"] = stress_df[
-            "text"
-        ].apply(clean_text)
-        df = stress_df
+        df = stress_df.copy()
+        df["clean_text"] = df["text"].apply(
+            clean_text
+        )
 
     X = df["clean_text"]
     y = df["label"]
@@ -369,29 +351,37 @@ elif st.session_state.page == "Model Training":
             X_test_vec
         )
 
+        acc = accuracy_score(
+            y_test,
+            y_pred
+        )
+
+        prec = precision_score(
+            y_test,
+            y_pred,
+            average="weighted"
+        )
+
+        rec = recall_score(
+            y_test,
+            y_pred,
+            average="weighted"
+        )
+
+        f1 = f1_score(
+            y_test,
+            y_pred,
+            average="weighted"
+        )
+
         st.session_state.model = model
         st.session_state.vectorizer = vectorizer
 
         st.session_state.results = {
-            "accuracy": accuracy_score(
-                y_test,
-                y_pred
-            ),
-            "precision": precision_score(
-                y_test,
-                y_pred,
-                average="weighted"
-            ),
-            "recall": recall_score(
-                y_test,
-                y_pred,
-                average="weighted"
-            ),
-            "f1": f1_score(
-                y_test,
-                y_pred,
-                average="weighted"
-            ),
+            "accuracy": acc,
+            "precision": prec,
+            "recall": rec,
+            "f1": f1,
             "y_test": y_test,
             "y_pred": y_pred
         }
@@ -411,15 +401,16 @@ elif st.session_state.page == "Model Training":
             "models/tfidf.pkl"
         )
 
-        st.success("Training selesai")
-
+        st.success(
+            "Model berhasil dilatih"
+        )
 
 # ======================================
 # EVALUATION
 # ======================================
 elif st.session_state.page == "Evaluation":
 
-    st.title("Evaluation")
+    st.title("Model Evaluation")
 
     if st.session_state.results:
 
@@ -467,16 +458,15 @@ elif st.session_state.page == "Evaluation":
             "Train model terlebih dahulu"
         )
 
-
 # ======================================
 # PREDICTION
 # ======================================
 elif st.session_state.page == "Prediction":
 
-    st.title("Prediction")
+    st.title("Stress Prediction")
 
     user_text = st.text_area(
-        "Masukkan teks"
+        "Masukkan teks sosial media"
     )
 
     if st.button("Predict"):
@@ -493,6 +483,11 @@ elif st.session_state.page == "Prediction":
                 st.session_state.vectorizer = joblib.load(
                     "models/tfidf.pkl"
                 )
+            else:
+                st.warning(
+                    "Train model terlebih dahulu"
+                )
+                st.stop()
 
         clean_input = clean_text(
             user_text
@@ -507,17 +502,20 @@ elif st.session_state.page == "Prediction":
         )[0]
 
         if prediction == 0:
-            label = "Normal 😌"
+            result = "Normal 😌"
         elif prediction == 1:
-            label = "Mild Stress 😥"
+            result = "Mild Stress 😥"
         else:
-            label = "High Stress 😫"
+            result = "High Stress 😫"
 
         st.success(
-            f"Prediction: {label}"
+            f"Prediction: {result}"
+        )
+
+        st.subheader(
+            "Processed Text"
         )
 
         st.write(
-            "Processed Text:",
             clean_input
         )
