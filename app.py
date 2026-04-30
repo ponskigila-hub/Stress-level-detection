@@ -119,27 +119,39 @@ def normalize_dataset(df, text_col, label_col=None):
 @st.cache_data
 def load_local_datasets():
 
-    # emotion_accuracy_training.csv
+    # emotion dataset
     emotion_train = pd.read_csv(
         "data/emotion_accuracy_training.csv"
     )
 
-    emotion_train = normalize_dataset(
-        emotion_train,
-        "text",
-        "label"
+    emotion_train.columns = (
+        emotion_train.columns.str.strip()
     )
 
-    # ugm_fess_labeled.csv
+    # stress dataset
     stress_df = pd.read_csv(
-        "data/ugm_fess_labeled.csv"
+        "data/ugm_fess_labeled.csv",
+        sep=";"
     )
 
-    stress_df = normalize_dataset(
-        stress_df,
-        "full_text",
-        "label"
+    stress_df.columns = (
+        stress_df.columns.str.strip()
     )
+
+    # rename agar konsisten
+    if "full_text" in stress_df.columns:
+        stress_df = stress_df.rename(
+            columns={
+                "full_text": "text"
+            }
+        )
+
+    if "tweet" in emotion_train.columns:
+        emotion_train = emotion_train.rename(
+            columns={
+                "tweet": "text"
+            }
+        )
 
     return emotion_train, stress_df
 
@@ -306,19 +318,231 @@ elif st.session_state.page == "Dataset Overview":
 # ======================================
 elif st.session_state.page == "Preprocessing":
 
-    st.title("Text Preprocessing")
+    st.title("🧹 Text Preprocessing")
 
-    stress_df["clean_text"] = stress_df["text"].apply(
-        clean_text
-    )
+    # validasi kolom text
+    if "text" not in stress_df.columns:
+        st.error(
+            f"Kolom 'text' tidak ditemukan.\nKolom tersedia: {stress_df.columns.tolist()}"
+        )
+        st.stop()
 
-    st.success("Preprocessing selesai")
+    # validasi kolom label
+    if "label" not in stress_df.columns:
+        st.error(
+            f"Kolom 'label' tidak ditemukan.\nKolom tersedia: {stress_df.columns.tolist()}"
+        )
+        st.stop()
+
+    st.subheader("Dataset Before Preprocessing")
 
     st.dataframe(
-        stress_df[
-            ["text", "clean_text"]
-        ].head(10)
+        stress_df.head(10),
+        use_container_width=True
     )
+
+    # info dataset awal
+    c1, c2, c3 = st.columns(3)
+
+    c1.metric(
+        "Total Data",
+        len(stress_df)
+    )
+
+    c2.metric(
+        "Missing Text",
+        stress_df["text"].isnull().sum()
+    )
+
+    c3.metric(
+        "Unique Labels",
+        stress_df["label"].nunique()
+    )
+
+    st.markdown("---")
+
+    preprocess_option = st.multiselect(
+        "Choose preprocessing steps",
+        [
+            "Lowercase",
+            "Remove URL",
+            "Remove Mention",
+            "Remove Hashtag",
+            "Remove Special Characters",
+            "Tokenization",
+            "Stemming"
+        ],
+        default=[
+            "Lowercase",
+            "Remove URL",
+            "Remove Mention",
+            "Remove Hashtag",
+            "Remove Special Characters",
+            "Tokenization",
+            "Stemming"
+        ]
+    )
+
+    if st.button("🚀 Run Preprocessing"):
+
+        processed_df = stress_df.copy()
+
+        # hapus null
+        processed_df = processed_df.dropna(
+            subset=["text"]
+        )
+
+        def preprocess_pipeline(text):
+
+            text = str(text)
+
+            # lowercase
+            if "Lowercase" in preprocess_option:
+                text = text.lower()
+
+            # remove url
+            if "Remove URL" in preprocess_option:
+                text = re.sub(
+                    r"http\S+",
+                    "",
+                    text
+                )
+
+            # remove mention
+            if "Remove Mention" in preprocess_option:
+                text = re.sub(
+                    r"@\w+",
+                    "",
+                    text
+                )
+
+            # remove hashtag
+            if "Remove Hashtag" in preprocess_option:
+                text = re.sub(
+                    r"#\w+",
+                    "",
+                    text
+                )
+
+            # remove special chars
+            if "Remove Special Characters" in preprocess_option:
+                text = re.sub(
+                    r"[^a-zA-Z\s]",
+                    "",
+                    text
+                )
+
+            # tokenization
+            if "Tokenization" in preprocess_option:
+                tokens = text.split()
+            else:
+                tokens = [text]
+
+            # stemming
+            if "Stemming" in preprocess_option:
+                tokens = [
+                    stemmer.stem(word)
+                    for word in tokens
+                ]
+
+            return " ".join(tokens)
+
+        # preprocessing text
+        processed_df["clean_text"] = processed_df[
+            "text"
+        ].apply(
+            preprocess_pipeline
+        )
+
+        # simpan ke session
+        st.session_state.processed_df = processed_df
+
+        st.success(
+            "✅ Preprocessing completed successfully!"
+        )
+
+        st.markdown("---")
+
+        st.subheader("Before vs After Preprocessing")
+
+        preview_df = pd.DataFrame({
+            "Original Text": processed_df[
+                "text"
+            ].head(10),
+            "Processed Text": processed_df[
+                "clean_text"
+            ].head(10)
+        })
+
+        st.dataframe(
+            preview_df,
+            use_container_width=True
+        )
+
+        st.markdown("---")
+
+        c1, c2 = st.columns(2)
+
+        c1.metric(
+            "Ready for Training",
+            len(processed_df)
+        )
+
+        avg_len_before = processed_df[
+            "text"
+        ].apply(
+            lambda x: len(str(x).split())
+        ).mean()
+
+        avg_len_after = processed_df[
+            "clean_text"
+        ].apply(
+            lambda x: len(str(x).split())
+        ).mean()
+
+        c2.metric(
+            "Avg Tokens (After)",
+            round(avg_len_after, 2)
+        )
+
+        st.subheader("Label Distribution")
+
+        label_count = processed_df[
+            "label"
+        ].value_counts()
+
+        fig, ax = plt.subplots()
+
+        ax.bar(
+            label_count.index.astype(str),
+            label_count.values
+        )
+
+        ax.set_xlabel(
+            "Stress Level"
+        )
+
+        ax.set_ylabel(
+            "Count"
+        )
+
+        ax.set_title(
+            "Stress Label Distribution"
+        )
+
+        st.pyplot(fig)
+
+    # jika preprocessing sudah pernah dijalankan
+    elif "processed_df" in st.session_state:
+
+        st.info(
+            "Preprocessing sudah dilakukan sebelumnya."
+        )
+
+        st.dataframe(
+            st.session_state.processed_df.head(10),
+            use_container_width=True
+        )
 
 # ======================================
 # MODEL TRAINING
