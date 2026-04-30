@@ -17,6 +17,9 @@ from sklearn.metrics import (
     confusion_matrix
 )
 
+from nltk.stem import PorterStemmer
+
+
 # ======================================
 # PAGE CONFIG
 # ======================================
@@ -27,25 +30,24 @@ st.set_page_config(
 )
 
 # ======================================
-# CUSTOM CSS
+# CSS
 # ======================================
 st.markdown("""
 <style>
-[data-testid="stSidebar"] {
-    background-color: #111827;
+[data-testid="stSidebar"]{
+    background-color:#111827;
 }
 h1,h2,h3{
     color:#2563EB;
 }
 .stButton>button{
     width:100%;
-    border-radius:10px;
 }
 </style>
 """, unsafe_allow_html=True)
 
 # ======================================
-# SESSION STATE
+# SESSION
 # ======================================
 if "page" not in st.session_state:
     st.session_state.page = "Home"
@@ -59,28 +61,36 @@ if "vectorizer" not in st.session_state:
 if "results" not in st.session_state:
     st.session_state.results = None
 
+stemmer = PorterStemmer()
+
+
 # ======================================
-# TEXT CLEANING
+# CLEAN TEXT
 # ======================================
 def clean_text(text):
     text = str(text).lower()
 
-    # hapus URL
     text = re.sub(r"http\S+", "", text)
-
-    # hapus mention
     text = re.sub(r"@\w+", "", text)
-
-    # hapus hashtag
     text = re.sub(r"#\w+", "", text)
-
-    # hapus angka dan simbol
     text = re.sub(r"[^a-zA-Z\s]", "", text)
 
-    # tokenisasi sederhana
     tokens = text.split()
+    tokens = [stemmer.stem(word) for word in tokens]
 
     return " ".join(tokens)
+
+
+# ======================================
+# NORMALIZE COLUMN
+# ======================================
+def normalize_columns(df):
+    df.columns = (
+        df.columns
+        .str.strip()
+        .str.replace(";", "", regex=False)
+    )
+    return df
 
 
 # ======================================
@@ -89,67 +99,59 @@ def clean_text(text):
 @st.cache_data
 def load_datasets():
 
-    # dataset emotion
+    # emotion dataset
     emotion_df = pd.read_csv(
         "data/emotion_accuracy_training.csv"
     )
 
-    emotion_df.columns = emotion_df.columns.str.strip()
+    emotion_df = normalize_columns(emotion_df)
 
-    # jika kolom tweet ada
     if "tweet" in emotion_df.columns:
         emotion_df = emotion_df.rename(
-            columns={
-                "tweet": "text"
-            }
+            columns={"tweet": "text"}
         )
 
-    # dataset stress
+    # stress dataset
     stress_df = pd.read_csv(
         "data/ugm_fess_labeled.csv",
-        sep=","
+        sep=";"
     )
 
-    # bersihkan nama kolom
-    stress_df.columns = (
-        stress_df.columns
-        .str.strip()
-        .str.replace(";", "", regex=False)
-    )
+    stress_df = normalize_columns(stress_df)
 
-    # rename full_text jadi text
     if "full_text" in stress_df.columns:
         stress_df = stress_df.rename(
-            columns={
-                "full_text": "text"
-            }
+            columns={"full_text": "text"}
         )
 
-    # rename kolom label yang kotor
-    for col in stress_df.columns:
-        if "label" in col.lower():
-            stress_df = stress_df.rename(
-                columns={
-                    col: "label"
-                }
-            )
+    # normalize label
+    stress_df["label"] = pd.to_numeric(
+        stress_df["label"],
+        errors="coerce"
+    )
 
-    # bersihkan isi label
-    if "label" in stress_df.columns:
-        stress_df["label"] = (
-            stress_df["label"]
-            .astype(str)
-            .str.replace(";", "", regex=False)
-            .astype(int)
-        )
+    # remove invalid labels
+    stress_df = stress_df.dropna(
+        subset=["label"]
+    )
+
+    stress_df["label"] = stress_df[
+        "label"
+    ].astype(int)
+
+    # remove empty text
+    stress_df = stress_df.dropna(
+        subset=["text"]
+    )
 
     return emotion_df, stress_df
 
 
 emotion_df, stress_df = load_datasets()
 
+
 # ======================================
-# SIDEBAR NAVIGATION
+# SIDEBAR
 # ======================================
 with st.sidebar:
 
@@ -207,15 +209,9 @@ elif st.session_state.page == "Dataset Overview":
     ])
 
     with tab1:
-        st.subheader("Stress Dataset")
-        st.write("Detected Columns:")
-        st.write(stress_df.columns.tolist())
         st.dataframe(stress_df.head())
 
     with tab2:
-        st.subheader("Emotion Dataset")
-        st.write("Detected Columns:")
-        st.write(emotion_df.columns.tolist())
         st.dataframe(emotion_df.head())
 
 
@@ -226,48 +222,23 @@ elif st.session_state.page == "Preprocessing":
 
     st.title("Text Preprocessing")
 
-    # validasi kolom
-    if "text" not in stress_df.columns:
-        st.error(
-            "Kolom text tidak ditemukan"
-        )
-        st.stop()
+    st.write("Dataset columns:")
+    st.write(stress_df.columns.tolist())
 
-    if "label" not in stress_df.columns:
-        st.error(
-            "Kolom label tidak ditemukan"
-        )
-        st.stop()
+    stress_df["clean_text"] = stress_df[
+        "text"
+    ].apply(clean_text)
 
-    processed_df = stress_df.copy()
+    st.success("Preprocessing selesai")
 
-    # hapus missing value
-    processed_df = processed_df.dropna(
-        subset=["text"]
-    )
+    preview = pd.DataFrame({
+        "Original": stress_df["text"].head(10),
+        "Processed": stress_df["clean_text"].head(10)
+    })
 
-    # preprocessing
-    processed_df["clean_text"] = (
-        processed_df["text"]
-        .apply(clean_text)
-    )
+    st.dataframe(preview)
 
-    # simpan ke session
-    st.session_state.processed_df = processed_df
-
-    st.success(
-        "Preprocessing selesai"
-    )
-
-    st.dataframe(
-        processed_df[
-            [
-                "text",
-                "clean_text",
-                "label"
-            ]
-        ].head(10)
-    )
+    st.session_state.processed_df = stress_df
 
 
 # ======================================
@@ -277,17 +248,6 @@ elif st.session_state.page == "Model Training":
 
     st.title("Train Model")
 
-    if "processed_df" not in st.session_state:
-        st.warning(
-            "Jalankan preprocessing dulu"
-        )
-        st.stop()
-
-    df = st.session_state.processed_df
-
-    X = df["clean_text"]
-    y = df["label"]
-
     model_choice = st.selectbox(
         "Choose Model",
         [
@@ -296,26 +256,37 @@ elif st.session_state.page == "Model Training":
         ]
     )
 
+    if "processed_df" in st.session_state:
+        df = st.session_state.processed_df
+    else:
+        stress_df["clean_text"] = stress_df[
+            "text"
+        ].apply(clean_text)
+        df = stress_df
+
+    X = df["clean_text"]
+    y = df["label"]
+
+    X_train, X_test, y_train, y_test = train_test_split(
+        X,
+        y,
+        test_size=0.2,
+        random_state=42
+    )
+
+    vectorizer = TfidfVectorizer(
+        max_features=5000
+    )
+
+    X_train_vec = vectorizer.fit_transform(
+        X_train
+    )
+
+    X_test_vec = vectorizer.transform(
+        X_test
+    )
+
     if st.button("Train Model"):
-
-        X_train, X_test, y_train, y_test = train_test_split(
-            X,
-            y,
-            test_size=0.2,
-            random_state=42
-        )
-
-        vectorizer = TfidfVectorizer(
-            max_features=5000
-        )
-
-        X_train_vec = vectorizer.fit_transform(
-            X_train
-        )
-
-        X_test_vec = vectorizer.transform(
-            X_test
-        )
 
         if model_choice == "Logistic Regression":
             model = LogisticRegression(
@@ -333,37 +304,29 @@ elif st.session_state.page == "Model Training":
             X_test_vec
         )
 
-        acc = accuracy_score(
-            y_test,
-            y_pred
-        )
-
-        prec = precision_score(
-            y_test,
-            y_pred,
-            average="weighted"
-        )
-
-        rec = recall_score(
-            y_test,
-            y_pred,
-            average="weighted"
-        )
-
-        f1 = f1_score(
-            y_test,
-            y_pred,
-            average="weighted"
-        )
-
         st.session_state.model = model
         st.session_state.vectorizer = vectorizer
 
         st.session_state.results = {
-            "accuracy": acc,
-            "precision": prec,
-            "recall": rec,
-            "f1": f1,
+            "accuracy": accuracy_score(
+                y_test,
+                y_pred
+            ),
+            "precision": precision_score(
+                y_test,
+                y_pred,
+                average="weighted"
+            ),
+            "recall": recall_score(
+                y_test,
+                y_pred,
+                average="weighted"
+            ),
+            "f1": f1_score(
+                y_test,
+                y_pred,
+                average="weighted"
+            ),
             "y_test": y_test,
             "y_pred": y_pred
         }
@@ -383,9 +346,7 @@ elif st.session_state.page == "Model Training":
             "models/tfidf.pkl"
         )
 
-        st.success(
-            "Model berhasil dilatih"
-        )
+        st.success("Training selesai")
 
 
 # ======================================
@@ -393,7 +354,7 @@ elif st.session_state.page == "Model Training":
 # ======================================
 elif st.session_state.page == "Evaluation":
 
-    st.title("Model Evaluation")
+    st.title("Evaluation")
 
     if st.session_state.results:
 
@@ -438,7 +399,7 @@ elif st.session_state.page == "Evaluation":
 
     else:
         st.warning(
-            "Train model dulu"
+            "Train model terlebih dahulu"
         )
 
 
@@ -447,10 +408,10 @@ elif st.session_state.page == "Evaluation":
 # ======================================
 elif st.session_state.page == "Prediction":
 
-    st.title("Stress Prediction")
+    st.title("Prediction")
 
     user_text = st.text_area(
-        "Masukkan teks sosial media"
+        "Masukkan teks"
     )
 
     if st.button("Predict"):
@@ -467,27 +428,18 @@ elif st.session_state.page == "Prediction":
                 st.session_state.vectorizer = joblib.load(
                     "models/tfidf.pkl"
                 )
-            else:
-                st.error(
-                    "Model belum dilatih"
-                )
-                st.stop()
 
         clean_input = clean_text(
             user_text
         )
 
-        vectorized = (
-            st.session_state.vectorizer.transform(
-                [clean_input]
-            )
+        vectorized = st.session_state.vectorizer.transform(
+            [clean_input]
         )
 
-        prediction = (
-            st.session_state.model.predict(
-                vectorized
-            )[0]
-        )
+        prediction = st.session_state.model.predict(
+            vectorized
+        )[0]
 
         if prediction == 0:
             label = "Normal 😌"
@@ -500,10 +452,7 @@ elif st.session_state.page == "Prediction":
             f"Prediction: {label}"
         )
 
-        st.subheader(
-            "Processed Text"
-        )
-
         st.write(
+            "Processed Text:",
             clean_input
         )
