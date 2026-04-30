@@ -99,12 +99,31 @@ def normalize_columns(df):
 @st.cache_data
 def load_datasets():
 
-    # =========================
-    # emotion dataset
-    # =========================
-    emotion_df = pd.read_csv(
-        "data/emotion_accuracy_training.csv"
-    )
+    # cek file exists
+    emotion_path = "data/emotion_accuracy_training.csv"
+    stress_path = "data/ugm_fess_labeled.csv"
+
+    if not os.path.exists(emotion_path):
+        st.error(f"File tidak ditemukan: {emotion_path}")
+        st.stop()
+
+    if not os.path.exists(stress_path):
+        st.error(f"File tidak ditemukan: {stress_path}")
+        st.stop()
+
+    # ==========================
+    # LOAD EMOTION DATASET
+    # ==========================
+    try:
+        emotion_df = pd.read_csv(
+            emotion_path,
+            encoding="utf-8"
+        )
+    except:
+        emotion_df = pd.read_csv(
+            emotion_path,
+            encoding="latin1"
+        )
 
     emotion_df.columns = (
         emotion_df.columns
@@ -112,29 +131,42 @@ def load_datasets():
         .str.replace(";", "", regex=False)
     )
 
+    # support text/tweet
     if "tweet" in emotion_df.columns:
         emotion_df = emotion_df.rename(
             columns={"tweet": "text"}
         )
 
-    # =========================
-    # stress dataset
-    # =========================
-    stress_df = pd.read_csv(
-        "data/ugm_fess_labeled.csv"
-    )
+    if "text" not in emotion_df.columns:
+        st.error(
+            f"Emotion dataset tidak punya kolom text. Kolom: {emotion_df.columns.tolist()}"
+        )
+        st.stop()
 
-    # bersihkan nama kolom
+    # ==========================
+    # LOAD STRESS DATASET
+    # ==========================
+    try:
+        stress_df = pd.read_csv(
+            stress_path,
+            sep=";"
+        )
+    except:
+        stress_df = pd.read_csv(
+            stress_path
+        )
+
     stress_df.columns = (
         stress_df.columns
         .str.strip()
         .str.replace(";", "", regex=False)
     )
 
-    # debug kolom
-    print("Detected stress columns:", stress_df.columns.tolist())
+    # debug lihat kolom
+    st.write("Detected Stress Columns:")
+    st.write(stress_df.columns.tolist())
 
-    # rename text
+    # rename full_text -> text
     if "full_text" in stress_df.columns:
         stress_df = stress_df.rename(
             columns={
@@ -142,28 +174,31 @@ def load_datasets():
             }
         )
 
-    # cari kolom label secara fleksibel
+    # cari label column otomatis
     label_col = None
-
     for col in stress_df.columns:
         if "label" in col.lower():
             label_col = col
             break
 
-    if label_col is None:
+    if "text" not in stress_df.columns:
         st.error(
-            f"Kolom label tidak ditemukan. Kolom tersedia: {stress_df.columns.tolist()}"
+            f"Kolom text tidak ditemukan. Kolom: {stress_df.columns.tolist()}"
         )
         st.stop()
 
-    # rename label
+    if label_col is None:
+        st.error(
+            f"Kolom label tidak ditemukan. Kolom: {stress_df.columns.tolist()}"
+        )
+        st.stop()
+
     stress_df = stress_df.rename(
         columns={
             label_col: "label"
         }
     )
 
-    # convert label
     stress_df["label"] = pd.to_numeric(
         stress_df["label"],
         errors="coerce"
