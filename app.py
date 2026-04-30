@@ -48,19 +48,22 @@ h1,h2,h3{
 """, unsafe_allow_html=True)
 
 # ======================================
-# SESSION STATE
+# SESSION
 # ======================================
-session_defaults = {
-    "page": "Home",
-    "model": None,
-    "vectorizer": None,
-    "results": None,
-    "processed_df": None
-}
+if "page" not in st.session_state:
+    st.session_state.page = "Home"
 
-for key, value in session_defaults.items():
-    if key not in st.session_state:
-        st.session_state[key] = value
+if "model" not in st.session_state:
+    st.session_state.model = None
+
+if "vectorizer" not in st.session_state:
+    st.session_state.vectorizer = None
+
+if "results" not in st.session_state:
+    st.session_state.results = None
+
+if "processed_df" not in st.session_state:
+    st.session_state.processed_df = None
 
 stemmer = PorterStemmer()
 
@@ -81,17 +84,26 @@ def clean_text(text):
     return " ".join(tokens)
 
 # ======================================
-# NORMALIZE COLUMNS
+# NORMALIZE DATASET
 # ======================================
-def normalize_dataset(df, text_col, label_col=None):
+def normalize_dataset(df, text_col=None, label_col=None):
     df = df.copy()
+
     df.columns = df.columns.str.strip()
 
-    if text_col in df.columns:
-        df = df.rename(columns={text_col: "text"})
+    if text_col and text_col in df.columns:
+        df = df.rename(
+            columns={
+                text_col: "text"
+            }
+        )
 
     if label_col and label_col in df.columns:
-        df = df.rename(columns={label_col: "label"})
+        df = df.rename(
+            columns={
+                label_col: "label"
+            }
+        )
 
     return df
 
@@ -101,6 +113,7 @@ def normalize_dataset(df, text_col, label_col=None):
 @st.cache_data
 def load_local_datasets():
 
+    # emotion training dataset
     emotion_train = pd.read_csv(
         "data/emotion_accuracy_training.csv"
     )
@@ -111,9 +124,9 @@ def load_local_datasets():
         "label"
     )
 
+    # stress dataset
     stress_df = pd.read_csv(
-        "data/ugm_fess_labeled.csv",
-        sep=";"
+        "data/ugm_fess_labeled.csv"
     )
 
     stress_df = normalize_dataset(
@@ -130,7 +143,7 @@ def load_local_datasets():
 @st.cache_data
 def load_hf_datasets():
 
-    # Indo slang
+    # indo slang
     indo_slang = load_dataset(
         "zeroix07/indo-slang-words"
     )
@@ -144,7 +157,7 @@ def load_hf_datasets():
         "text"
     )
 
-    # English slang 1
+    # english slang 1
     english_slang1 = load_dataset(
         "MariyaAnjum/genz-slang-dataset"
     )
@@ -158,7 +171,7 @@ def load_hf_datasets():
         "Slang"
     )
 
-    # English slang 2
+    # english slang 2
     english_slang2 = load_dataset(
         "acader/genz-alpha-slangs"
     )
@@ -172,7 +185,7 @@ def load_hf_datasets():
         "Sentence"
     )
 
-    # GoEmotions
+    # go emotions
     english_emotion = load_dataset(
         "google-research-datasets/go_emotions"
     )
@@ -194,9 +207,6 @@ def load_hf_datasets():
         english_emotion_df
     )
 
-# ======================================
-# LOAD ALL DATA
-# ======================================
 emotion_train, stress_df = load_local_datasets()
 
 (
@@ -262,31 +272,27 @@ elif st.session_state.page == "Dataset Overview":
 
     st.title("Dataset Overview")
 
-    tabs = st.tabs([
-        "Stress Dataset",
-        "Emotion Dataset",
+    tab1, tab2, tab3, tab4, tab5 = st.tabs([
+        "Stress",
+        "Emotion Train",
         "Indo Slang",
-        "English Slang 1",
-        "English Slang 2",
+        "English Slang",
         "GoEmotions"
     ])
 
-    with tabs[0]:
+    with tab1:
         st.dataframe(stress_df.head())
 
-    with tabs[1]:
+    with tab2:
         st.dataframe(emotion_train.head())
 
-    with tabs[2]:
+    with tab3:
         st.dataframe(indo_slang.head())
 
-    with tabs[3]:
+    with tab4:
         st.dataframe(english_slang1.head())
 
-    with tabs[4]:
-        st.dataframe(english_slang2.head())
-
-    with tabs[5]:
+    with tab5:
         st.dataframe(english_emotion.head())
 
 # ======================================
@@ -294,35 +300,104 @@ elif st.session_state.page == "Dataset Overview":
 # ======================================
 elif st.session_state.page == "Preprocessing":
 
-    st.title("Text Preprocessing")
+    st.title("🧹 Text Preprocessing")
 
-    processed_df = stress_df.copy()
+    st.subheader("Detected Columns")
+    st.write(stress_df.columns.tolist())
 
-    processed_df = processed_df.dropna(
-        subset=["text"]
-    )
+    # validasi text
+    if "text" not in stress_df.columns:
 
-    processed_df["clean_text"] = processed_df[
-        "text"
-    ].apply(
-        clean_text
-    )
+        possible_text_cols = [
+            col for col in stress_df.columns
+            if "text" in col.lower()
+        ]
 
-    st.session_state.processed_df = processed_df
+        if len(possible_text_cols) > 0:
+            stress_df = stress_df.rename(
+                columns={
+                    possible_text_cols[0]: "text"
+                }
+            )
+        else:
+            st.error("Kolom text tidak ditemukan")
+            st.stop()
 
-    st.success(
-        "Preprocessing completed"
-    )
+    # validasi label
+    if "label" not in stress_df.columns:
+        st.error("Kolom label tidak ditemukan")
+        st.stop()
 
-    preview_df = pd.DataFrame({
-        "Original": processed_df["text"].head(10),
-        "Cleaned": processed_df["clean_text"].head(10)
-    })
+    st.subheader("Dataset Before Preprocessing")
 
     st.dataframe(
-        preview_df,
+        stress_df.head(10),
         use_container_width=True
     )
+
+    c1, c2, c3 = st.columns(3)
+
+    c1.metric(
+        "Total Data",
+        len(stress_df)
+    )
+
+    c2.metric(
+        "Missing Text",
+        stress_df["text"].isnull().sum()
+    )
+
+    c3.metric(
+        "Unique Labels",
+        stress_df["label"].nunique()
+    )
+
+    if st.button("🚀 Run Preprocessing"):
+
+        processed_df = stress_df.copy()
+
+        processed_df = processed_df[
+            processed_df["text"].notna()
+        ]
+
+        processed_df["clean_text"] = processed_df[
+            "text"
+        ].apply(clean_text)
+
+        st.session_state.processed_df = processed_df
+
+        st.success(
+            "Preprocessing selesai"
+        )
+
+        preview_df = pd.DataFrame({
+            "Original Text": processed_df["text"].head(10),
+            "Processed Text": processed_df["clean_text"].head(10)
+        })
+
+        st.dataframe(
+            preview_df,
+            use_container_width=True
+        )
+
+        st.subheader("Label Distribution")
+
+        label_count = processed_df[
+            "label"
+        ].value_counts()
+
+        fig, ax = plt.subplots()
+
+        ax.bar(
+            label_count.index.astype(str),
+            label_count.values
+        )
+
+        ax.set_xlabel("Label")
+        ax.set_ylabel("Count")
+        ax.set_title("Stress Distribution")
+
+        st.pyplot(fig)
 
 # ======================================
 # MODEL TRAINING
@@ -330,6 +405,12 @@ elif st.session_state.page == "Preprocessing":
 elif st.session_state.page == "Model Training":
 
     st.title("Train Model")
+
+    if st.session_state.processed_df is None:
+        st.warning(
+            "Lakukan preprocessing terlebih dahulu"
+        )
+        st.stop()
 
     model_choice = st.selectbox(
         "Choose Model",
@@ -339,19 +420,10 @@ elif st.session_state.page == "Model Training":
         ]
     )
 
-    # gunakan hasil preprocessing jika ada
-    if st.session_state.processed_df is not None:
-        df_train = st.session_state.processed_df
-    else:
-        df_train = stress_df.copy()
-        df_train["clean_text"] = df_train[
-            "text"
-        ].apply(
-            clean_text
-        )
+    processed_df = st.session_state.processed_df
 
-    X = df_train["clean_text"]
-    y = df_train["label"]
+    X = processed_df["clean_text"]
+    y = processed_df["label"]
 
     X_train, X_test, y_train, y_test = train_test_split(
         X,
@@ -433,7 +505,7 @@ elif st.session_state.page == "Model Training":
         )
 
         st.success(
-            "Model trained successfully"
+            "Model berhasil dilatih"
         )
 
 # ======================================
@@ -474,9 +546,7 @@ elif st.session_state.page == "Evaluation":
             result["y_pred"]
         )
 
-        fig, ax = plt.subplots(
-            figsize=(6, 4)
-        )
+        fig, ax = plt.subplots()
 
         ax.imshow(cm)
 
@@ -499,7 +569,7 @@ elif st.session_state.page == "Prediction":
     st.title("Stress Prediction")
 
     user_text = st.text_area(
-        "Masukkan teks sosial media"
+        "Masukkan teks media sosial"
     )
 
     if st.button("Predict"):
@@ -545,10 +615,5 @@ elif st.session_state.page == "Prediction":
             f"Prediction: {result}"
         )
 
-        st.subheader(
-            "Processed Text"
-        )
-
-        st.write(
-            clean_input
-        )
+        st.subheader("Processed Text")
+        st.write(clean_input)
