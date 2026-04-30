@@ -70,29 +70,25 @@ stemmer = PorterStemmer()
 # CLEAN TEXT
 # ======================================
 def clean_text(text):
-    def clean_text(text):
     text = str(text).lower()
 
-    # remove url
+    # hapus URL
     text = re.sub(r"http\S+", "", text)
 
-    # remove mention
+    # hapus mention
     text = re.sub(r"@\w+", "", text)
 
-    # remove hashtag
+    # hapus hashtag
     text = re.sub(r"#\w+", "", text)
 
-    # remove symbol/number
+    # hapus angka dan simbol
     text = re.sub(r"[^a-zA-Z\s]", "", text)
 
-    # simple tokenize
+    # tokenisasi sederhana
     tokens = text.split()
 
     # stemming
-    tokens = [
-        stemmer.stem(word)
-        for word in tokens
-    ]
+    tokens = [stemmer.stem(word) for word in tokens]
 
     return " ".join(tokens)
 
