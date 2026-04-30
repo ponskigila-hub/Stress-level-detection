@@ -24,7 +24,7 @@ from sklearn.metrics import (
 )
 
 # ======================================
-# DOWNLOAD NLTK
+# NLTK
 # ======================================
 nltk.download("punkt")
 
@@ -38,7 +38,7 @@ st.set_page_config(
 )
 
 # ======================================
-# CUSTOM CSS
+# CSS
 # ======================================
 st.markdown("""
 <style>
@@ -56,7 +56,7 @@ h1,h2,h3{
 """, unsafe_allow_html=True)
 
 # ======================================
-# SESSION STATE
+# SESSION
 # ======================================
 if "page" not in st.session_state:
     st.session_state.page = "Home"
@@ -70,13 +70,11 @@ if "vectorizer" not in st.session_state:
 if "results" not in st.session_state:
     st.session_state.results = None
 
-
-# ======================================
-# TEXT CLEANING
-# ======================================
 stemmer = PorterStemmer()
 
-
+# ======================================
+# CLEAN TEXT
+# ======================================
 def clean_text(text):
     text = str(text).lower()
 
@@ -90,6 +88,26 @@ def clean_text(text):
 
     return " ".join(tokens)
 
+# ======================================
+# NORMALIZE DATASET COLUMNS
+# ======================================
+def normalize_dataset(df, text_col, label_col=None):
+    df = df.copy()
+
+    df = df.rename(
+        columns={
+            text_col: "text"
+        }
+    )
+
+    if label_col:
+        df = df.rename(
+            columns={
+                label_col: "label"
+            }
+        )
+
+    return df
 
 # ======================================
 # LOAD LOCAL DATASETS
@@ -97,23 +115,29 @@ def clean_text(text):
 @st.cache_data
 def load_local_datasets():
 
+    # emotion_accuracy_training.csv
     emotion_train = pd.read_csv(
         "data/emotion_accuracy_training.csv"
     )
 
-    # rename tweet -> text
-    emotion_train = emotion_train.rename(
-        columns={
-            "tweet": "text"
-        }
+    emotion_train = normalize_dataset(
+        emotion_train,
+        "text",
+        "label"
     )
 
+    # ugm_fess_labeled.csv
     stress_df = pd.read_csv(
         "data/ugm_fess_labeled.csv"
     )
 
-    return emotion_train, stress_df
+    stress_df = normalize_dataset(
+        stress_df,
+        "full_text",
+        "label"
+    )
 
+    return emotion_train, stress_df
 
 # ======================================
 # LOAD HUGGINGFACE DATASETS
@@ -121,29 +145,69 @@ def load_local_datasets():
 @st.cache_data
 def load_hf_datasets():
 
+    # indo slang
     indo_slang = load_dataset(
         "zeroix07/indo-slang-words"
     )
 
+    indo_slang_df = pd.DataFrame(
+        indo_slang["train"]
+    )
+
+    indo_slang_df = normalize_dataset(
+        indo_slang_df,
+        "text"
+    )
+
+    # english slang 1
     english_slang1 = load_dataset(
         "MariyaAnjum/genz-slang-dataset"
     )
 
+    english_slang1_df = pd.DataFrame(
+        english_slang1["train"]
+    )
+
+    english_slang1_df = normalize_dataset(
+        english_slang1_df,
+        "Slang"
+    )
+
+    # english slang 2
     english_slang2 = load_dataset(
         "acader/genz-alpha-slangs"
     )
 
+    english_slang2_df = pd.DataFrame(
+        english_slang2["train"]
+    )
+
+    english_slang2_df = normalize_dataset(
+        english_slang2_df,
+        "Sentence"
+    )
+
+    # go emotions
     english_emotion = load_dataset(
         "google-research-datasets/go_emotions"
     )
 
-    return (
-        indo_slang,
-        english_slang1,
-        english_slang2,
-        english_emotion
+    english_emotion_df = pd.DataFrame(
+        english_emotion["train"]
     )
 
+    english_emotion_df = normalize_dataset(
+        english_emotion_df,
+        "text",
+        "labels"
+    )
+
+    return (
+        indo_slang_df,
+        english_slang1_df,
+        english_slang2_df,
+        english_emotion_df
+    )
 
 emotion_train, stress_df = load_local_datasets()
 
@@ -154,9 +218,8 @@ emotion_train, stress_df = load_local_datasets()
     english_emotion
 ) = load_hf_datasets()
 
-
 # ======================================
-# SIDEBAR NAVIGATION
+# SIDEBAR
 # ======================================
 with st.sidebar:
 
@@ -176,7 +239,6 @@ with st.sidebar:
             st.session_state.page = p
             st.rerun()
 
-
 # ======================================
 # HOME
 # ======================================
@@ -185,7 +247,7 @@ if st.session_state.page == "Home":
     st.title("Stress Level Detection")
 
     st.write(
-        "Deteksi tingkat stress pengguna media sosial menggunakan NLP"
+        "Deteksi stress level dari teks media sosial menggunakan NLP"
     )
 
     c1, c2, c3 = st.columns(3)
@@ -201,10 +263,9 @@ if st.session_state.page == "Home":
     )
 
     c3.metric(
-        "GoEmotions Dataset",
-        len(english_emotion["train"])
+        "GoEmotion Dataset",
+        len(english_emotion)
     )
-
 
 # ======================================
 # DATASET OVERVIEW
@@ -213,28 +274,28 @@ elif st.session_state.page == "Dataset Overview":
 
     st.title("Dataset Overview")
 
-    tab1, tab2, tab3 = st.tabs([
-        "Stress Dataset",
-        "Emotion Dataset",
+    tab1, tab2, tab3, tab4, tab5 = st.tabs([
+        "Stress",
+        "Emotion Train",
+        "Indo Slang",
+        "English Slang",
         "GoEmotions"
     ])
 
     with tab1:
-        st.subheader("Stress Dataset")
         st.dataframe(stress_df.head())
 
     with tab2:
-        st.subheader("Emotion Dataset")
         st.dataframe(emotion_train.head())
 
     with tab3:
-        st.subheader("GoEmotions")
-        st.dataframe(
-            pd.DataFrame(
-                english_emotion["train"][:5]
-            )
-        )
+        st.dataframe(indo_slang.head())
 
+    with tab4:
+        st.dataframe(english_slang1.head())
+
+    with tab5:
+        st.dataframe(english_emotion.head())
 
 # ======================================
 # PREPROCESSING
@@ -254,7 +315,6 @@ elif st.session_state.page == "Preprocessing":
             ["text", "clean_text"]
         ].head(10)
     )
-
 
 # ======================================
 # MODEL TRAINING
@@ -315,37 +375,26 @@ elif st.session_state.page == "Model Training":
             X_test_vec
         )
 
-        acc = accuracy_score(
-            y_test,
-            y_pred
-        )
-
-        prec = precision_score(
-            y_test,
-            y_pred,
-            average="weighted"
-        )
-
-        rec = recall_score(
-            y_test,
-            y_pred,
-            average="weighted"
-        )
-
-        f1 = f1_score(
-            y_test,
-            y_pred,
-            average="weighted"
-        )
-
         st.session_state.model = model
         st.session_state.vectorizer = vectorizer
 
         st.session_state.results = {
-            "accuracy": acc,
-            "precision": prec,
-            "recall": rec,
-            "f1": f1,
+            "accuracy": accuracy_score(y_test, y_pred),
+            "precision": precision_score(
+                y_test,
+                y_pred,
+                average="weighted"
+            ),
+            "recall": recall_score(
+                y_test,
+                y_pred,
+                average="weighted"
+            ),
+            "f1": f1_score(
+                y_test,
+                y_pred,
+                average="weighted"
+            ),
             "y_test": y_test,
             "y_pred": y_pred
         }
@@ -366,9 +415,8 @@ elif st.session_state.page == "Model Training":
         )
 
         st.success(
-            "Model berhasil dilatih dan disimpan"
+            "Model berhasil dilatih"
         )
-
 
 # ======================================
 # EVALUATION
@@ -420,9 +468,8 @@ elif st.session_state.page == "Evaluation":
 
     else:
         st.warning(
-            "Train model terlebih dahulu"
+            "Train model dulu"
         )
-
 
 # ======================================
 # PREDICTION
@@ -439,16 +486,13 @@ elif st.session_state.page == "Prediction":
 
         if st.session_state.model is None:
 
-            if os.path.exists(
+            st.session_state.model = joblib.load(
                 "models/stress_model.pkl"
-            ):
-                st.session_state.model = joblib.load(
-                    "models/stress_model.pkl"
-                )
+            )
 
-                st.session_state.vectorizer = joblib.load(
-                    "models/tfidf.pkl"
-                )
+            st.session_state.vectorizer = joblib.load(
+                "models/tfidf.pkl"
+            )
 
         clean_input = clean_text(
             user_text
@@ -463,22 +507,15 @@ elif st.session_state.page == "Prediction":
         )[0]
 
         if prediction == 0:
-            label = "Normal 😌"
-
+            result = "Normal 😌"
         elif prediction == 1:
-            label = "Mild Stress 😥"
-
+            result = "Mild Stress 😥"
         else:
-            label = "High Stress 😫"
+            result = "High Stress 😫"
 
         st.success(
-            f"Prediction: {label}"
+            f"Prediction: {result}"
         )
 
-        st.subheader(
-            "Processed Text"
-        )
-
-        st.write(
-            clean_input
-        )
+        st.subheader("Processed Text")
+        st.write(clean_input)
