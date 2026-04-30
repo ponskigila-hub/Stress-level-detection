@@ -30,7 +30,7 @@ st.set_page_config(
 )
 
 # ======================================
-# CSS
+# CUSTOM CSS
 # ======================================
 st.markdown("""
 <style>
@@ -48,7 +48,7 @@ h1,h2,h3{
 """, unsafe_allow_html=True)
 
 # ======================================
-# SESSION
+# SESSION STATE
 # ======================================
 if "page" not in st.session_state:
     st.session_state.page = "Home"
@@ -89,7 +89,11 @@ def clean_text(text):
 def normalize_dataset(df, text_col=None, label_col=None):
     df = df.copy()
 
-    df.columns = df.columns.str.strip()
+    df.columns = (
+        df.columns
+        .str.strip()
+        .str.replace(";", "", regex=False)
+    )
 
     if text_col and text_col in df.columns:
         df = df.rename(
@@ -113,9 +117,15 @@ def normalize_dataset(df, text_col=None, label_col=None):
 @st.cache_data
 def load_local_datasets():
 
-    # emotion training dataset
+    # emotion dataset
     emotion_train = pd.read_csv(
         "data/emotion_accuracy_training.csv"
+    )
+
+    emotion_train.columns = (
+        emotion_train.columns
+        .str.strip()
+        .str.replace(";", "", regex=False)
     )
 
     emotion_train = normalize_dataset(
@@ -126,14 +136,22 @@ def load_local_datasets():
 
     # stress dataset
     stress_df = pd.read_csv(
-        "data/ugm_fess_labeled.csv"
+        "data/ugm_fess_labeled.csv",
+        sep=";"
     )
 
-    stress_df = normalize_dataset(
-        stress_df,
-        "full_text",
-        "label"
+    stress_df.columns = (
+        stress_df.columns
+        .str.strip()
+        .str.replace(";", "", regex=False)
     )
+
+    if "full_text" in stress_df.columns:
+        stress_df = stress_df.rename(
+            columns={
+                "full_text": "text"
+            }
+        )
 
     return emotion_train, stress_df
 
@@ -143,7 +161,6 @@ def load_local_datasets():
 @st.cache_data
 def load_hf_datasets():
 
-    # indo slang
     indo_slang = load_dataset(
         "zeroix07/indo-slang-words"
     )
@@ -157,7 +174,6 @@ def load_hf_datasets():
         "text"
     )
 
-    # english slang 1
     english_slang1 = load_dataset(
         "MariyaAnjum/genz-slang-dataset"
     )
@@ -171,7 +187,6 @@ def load_hf_datasets():
         "Slang"
     )
 
-    # english slang 2
     english_slang2 = load_dataset(
         "acader/genz-alpha-slangs"
     )
@@ -185,7 +200,6 @@ def load_hf_datasets():
         "Sentence"
     )
 
-    # go emotions
     english_emotion = load_dataset(
         "google-research-datasets/go_emotions"
     )
@@ -245,7 +259,7 @@ if st.session_state.page == "Home":
     st.title("Stress Level Detection")
 
     st.write(
-        "Deteksi tingkat stress dari teks media sosial menggunakan NLP"
+        "Deteksi tingkat stress pengguna media sosial menggunakan NLP"
     )
 
     c1, c2, c3 = st.columns(3)
@@ -305,25 +319,10 @@ elif st.session_state.page == "Preprocessing":
     st.subheader("Detected Columns")
     st.write(stress_df.columns.tolist())
 
-    # validasi text
     if "text" not in stress_df.columns:
+        st.error("Kolom text tidak ditemukan")
+        st.stop()
 
-        possible_text_cols = [
-            col for col in stress_df.columns
-            if "text" in col.lower()
-        ]
-
-        if len(possible_text_cols) > 0:
-            stress_df = stress_df.rename(
-                columns={
-                    possible_text_cols[0]: "text"
-                }
-            )
-        else:
-            st.error("Kolom text tidak ditemukan")
-            st.stop()
-
-    # validasi label
     if "label" not in stress_df.columns:
         st.error("Kolom label tidak ditemukan")
         st.stop()
@@ -466,10 +465,7 @@ elif st.session_state.page == "Model Training":
         st.session_state.vectorizer = vectorizer
 
         st.session_state.results = {
-            "accuracy": accuracy_score(
-                y_test,
-                y_pred
-            ),
+            "accuracy": accuracy_score(y_test, y_pred),
             "precision": precision_score(
                 y_test,
                 y_pred,
@@ -588,7 +584,7 @@ elif st.session_state.page == "Prediction":
                 )
             else:
                 st.error(
-                    "Model belum tersedia. Train dulu."
+                    "Model belum tersedia. Train model terlebih dahulu."
                 )
                 st.stop()
 
