@@ -5,10 +5,8 @@ import matplotlib.pyplot as plt
 import re
 import os
 import joblib
-import nltk
 
 from datasets import load_dataset
-from nltk.tokenize import word_tokenize
 from nltk.stem import PorterStemmer
 
 from sklearn.model_selection import train_test_split
@@ -23,10 +21,6 @@ from sklearn.metrics import (
     confusion_matrix
 )
 
-# ======================================
-# NLTK
-# ======================================
-nltk.download("punkt")
 
 # ======================================
 # PAGE CONFIG
@@ -76,15 +70,29 @@ stemmer = PorterStemmer()
 # CLEAN TEXT
 # ======================================
 def clean_text(text):
+    def clean_text(text):
     text = str(text).lower()
 
+    # remove url
     text = re.sub(r"http\S+", "", text)
+
+    # remove mention
     text = re.sub(r"@\w+", "", text)
+
+    # remove hashtag
     text = re.sub(r"#\w+", "", text)
+
+    # remove symbol/number
     text = re.sub(r"[^a-zA-Z\s]", "", text)
 
-    tokens = word_tokenize(text)
-    tokens = [stemmer.stem(word) for word in tokens]
+    # simple tokenize
+    tokens = text.split()
+
+    # stemming
+    tokens = [
+        stemmer.stem(word)
+        for word in tokens
+    ]
 
     return " ".join(tokens)
 
