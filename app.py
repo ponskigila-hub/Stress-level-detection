@@ -99,55 +99,85 @@ def normalize_columns(df):
 @st.cache_data
 def load_datasets():
 
+    # =========================
     # emotion dataset
+    # =========================
     emotion_df = pd.read_csv(
         "data/emotion_accuracy_training.csv"
     )
 
-    emotion_df = normalize_columns(emotion_df)
+    emotion_df.columns = (
+        emotion_df.columns
+        .str.strip()
+        .str.replace(";", "", regex=False)
+    )
 
     if "tweet" in emotion_df.columns:
         emotion_df = emotion_df.rename(
             columns={"tweet": "text"}
         )
 
+    # =========================
     # stress dataset
+    # =========================
     stress_df = pd.read_csv(
-        "data/ugm_fess_labeled.csv",
-        sep=";"
+        "data/ugm_fess_labeled.csv"
     )
 
-    stress_df = normalize_columns(stress_df)
+    # bersihkan nama kolom
+    stress_df.columns = (
+        stress_df.columns
+        .str.strip()
+        .str.replace(";", "", regex=False)
+    )
 
+    # debug kolom
+    print("Detected stress columns:", stress_df.columns.tolist())
+
+    # rename text
     if "full_text" in stress_df.columns:
         stress_df = stress_df.rename(
-            columns={"full_text": "text"}
+            columns={
+                "full_text": "text"
+            }
         )
 
-    # normalize label
+    # cari kolom label secara fleksibel
+    label_col = None
+
+    for col in stress_df.columns:
+        if "label" in col.lower():
+            label_col = col
+            break
+
+    if label_col is None:
+        st.error(
+            f"Kolom label tidak ditemukan. Kolom tersedia: {stress_df.columns.tolist()}"
+        )
+        st.stop()
+
+    # rename label
+    stress_df = stress_df.rename(
+        columns={
+            label_col: "label"
+        }
+    )
+
+    # convert label
     stress_df["label"] = pd.to_numeric(
         stress_df["label"],
         errors="coerce"
     )
 
-    # remove invalid labels
     stress_df = stress_df.dropna(
-        subset=["label"]
+        subset=["text", "label"]
     )
 
     stress_df["label"] = stress_df[
         "label"
     ].astype(int)
 
-    # remove empty text
-    stress_df = stress_df.dropna(
-        subset=["text"]
-    )
-
     return emotion_df, stress_df
-
-
-emotion_df, stress_df = load_datasets()
 
 
 # ======================================
