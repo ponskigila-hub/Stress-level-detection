@@ -1,6 +1,5 @@
 import streamlit as st
 import pandas as pd
-import numpy as np
 import matplotlib.pyplot as plt
 import re
 import os
@@ -20,7 +19,6 @@ from sklearn.metrics import (
     f1_score,
     confusion_matrix
 )
-
 
 # ======================================
 # PAGE CONFIG
@@ -50,19 +48,19 @@ h1,h2,h3{
 """, unsafe_allow_html=True)
 
 # ======================================
-# SESSION
+# SESSION STATE
 # ======================================
-if "page" not in st.session_state:
-    st.session_state.page = "Home"
+session_defaults = {
+    "page": "Home",
+    "model": None,
+    "vectorizer": None,
+    "results": None,
+    "processed_df": None
+}
 
-if "model" not in st.session_state:
-    st.session_state.model = None
-
-if "vectorizer" not in st.session_state:
-    st.session_state.vectorizer = None
-
-if "results" not in st.session_state:
-    st.session_state.results = None
+for key, value in session_defaults.items():
+    if key not in st.session_state:
+        st.session_state[key] = value
 
 stemmer = PorterStemmer()
 
@@ -72,44 +70,28 @@ stemmer = PorterStemmer()
 def clean_text(text):
     text = str(text).lower()
 
-    # hapus URL
     text = re.sub(r"http\S+", "", text)
-
-    # hapus mention
     text = re.sub(r"@\w+", "", text)
-
-    # hapus hashtag
     text = re.sub(r"#\w+", "", text)
-
-    # hapus angka dan simbol
     text = re.sub(r"[^a-zA-Z\s]", "", text)
 
-    # tokenisasi sederhana
     tokens = text.split()
-
-    # stemming
     tokens = [stemmer.stem(word) for word in tokens]
 
     return " ".join(tokens)
 
 # ======================================
-# NORMALIZE DATASET COLUMNS
+# NORMALIZE COLUMNS
 # ======================================
 def normalize_dataset(df, text_col, label_col=None):
     df = df.copy()
+    df.columns = df.columns.str.strip()
 
-    df = df.rename(
-        columns={
-            text_col: "text"
-        }
-    )
+    if text_col in df.columns:
+        df = df.rename(columns={text_col: "text"})
 
-    if label_col:
-        df = df.rename(
-            columns={
-                label_col: "label"
-            }
-        )
+    if label_col and label_col in df.columns:
+        df = df.rename(columns={label_col: "label"})
 
     return df
 
@@ -119,49 +101,36 @@ def normalize_dataset(df, text_col, label_col=None):
 @st.cache_data
 def load_local_datasets():
 
-    # emotion dataset
     emotion_train = pd.read_csv(
         "data/emotion_accuracy_training.csv"
     )
 
-    emotion_train.columns = (
-        emotion_train.columns.str.strip()
+    emotion_train = normalize_dataset(
+        emotion_train,
+        "text",
+        "label"
     )
 
-    # stress dataset
     stress_df = pd.read_csv(
         "data/ugm_fess_labeled.csv",
         sep=";"
     )
 
-    stress_df.columns = (
-        stress_df.columns.str.strip()
+    stress_df = normalize_dataset(
+        stress_df,
+        "full_text",
+        "label"
     )
-
-    # rename agar konsisten
-    if "full_text" in stress_df.columns:
-        stress_df = stress_df.rename(
-            columns={
-                "full_text": "text"
-            }
-        )
-
-    if "tweet" in emotion_train.columns:
-        emotion_train = emotion_train.rename(
-            columns={
-                "tweet": "text"
-            }
-        )
 
     return emotion_train, stress_df
 
 # ======================================
-# LOAD HUGGINGFACE DATASETS
+# LOAD HF DATASETS
 # ======================================
 @st.cache_data
 def load_hf_datasets():
 
-    # indo slang
+    # Indo slang
     indo_slang = load_dataset(
         "zeroix07/indo-slang-words"
     )
@@ -175,7 +144,7 @@ def load_hf_datasets():
         "text"
     )
 
-    # english slang 1
+    # English slang 1
     english_slang1 = load_dataset(
         "MariyaAnjum/genz-slang-dataset"
     )
@@ -189,7 +158,7 @@ def load_hf_datasets():
         "Slang"
     )
 
-    # english slang 2
+    # English slang 2
     english_slang2 = load_dataset(
         "acader/genz-alpha-slangs"
     )
@@ -203,7 +172,7 @@ def load_hf_datasets():
         "Sentence"
     )
 
-    # go emotions
+    # GoEmotions
     english_emotion = load_dataset(
         "google-research-datasets/go_emotions"
     )
@@ -225,6 +194,9 @@ def load_hf_datasets():
         english_emotion_df
     )
 
+# ======================================
+# LOAD ALL DATA
+# ======================================
 emotion_train, stress_df = load_local_datasets()
 
 (
@@ -263,7 +235,7 @@ if st.session_state.page == "Home":
     st.title("Stress Level Detection")
 
     st.write(
-        "Deteksi stress level dari teks media sosial menggunakan NLP"
+        "Deteksi tingkat stress dari teks media sosial menggunakan NLP"
     )
 
     c1, c2, c3 = st.columns(3)
@@ -279,7 +251,7 @@ if st.session_state.page == "Home":
     )
 
     c3.metric(
-        "GoEmotion Dataset",
+        "GoEmotions Dataset",
         len(english_emotion)
     )
 
@@ -290,27 +262,31 @@ elif st.session_state.page == "Dataset Overview":
 
     st.title("Dataset Overview")
 
-    tab1, tab2, tab3, tab4, tab5 = st.tabs([
-        "Stress",
-        "Emotion Train",
+    tabs = st.tabs([
+        "Stress Dataset",
+        "Emotion Dataset",
         "Indo Slang",
-        "English Slang",
+        "English Slang 1",
+        "English Slang 2",
         "GoEmotions"
     ])
 
-    with tab1:
+    with tabs[0]:
         st.dataframe(stress_df.head())
 
-    with tab2:
+    with tabs[1]:
         st.dataframe(emotion_train.head())
 
-    with tab3:
+    with tabs[2]:
         st.dataframe(indo_slang.head())
 
-    with tab4:
+    with tabs[3]:
         st.dataframe(english_slang1.head())
 
-    with tab5:
+    with tabs[4]:
+        st.dataframe(english_slang2.head())
+
+    with tabs[5]:
         st.dataframe(english_emotion.head())
 
 # ======================================
@@ -318,231 +294,35 @@ elif st.session_state.page == "Dataset Overview":
 # ======================================
 elif st.session_state.page == "Preprocessing":
 
-    st.title("🧹 Text Preprocessing")
+    st.title("Text Preprocessing")
 
-    # validasi kolom text
-    if "text" not in stress_df.columns:
-        st.error(
-            f"Kolom 'text' tidak ditemukan.\nKolom tersedia: {stress_df.columns.tolist()}"
-        )
-        st.stop()
+    processed_df = stress_df.copy()
 
-    # validasi kolom label
-    if "label" not in stress_df.columns:
-        st.error(
-            f"Kolom 'label' tidak ditemukan.\nKolom tersedia: {stress_df.columns.tolist()}"
-        )
-        st.stop()
+    processed_df = processed_df.dropna(
+        subset=["text"]
+    )
 
-    st.subheader("Dataset Before Preprocessing")
+    processed_df["clean_text"] = processed_df[
+        "text"
+    ].apply(
+        clean_text
+    )
+
+    st.session_state.processed_df = processed_df
+
+    st.success(
+        "Preprocessing completed"
+    )
+
+    preview_df = pd.DataFrame({
+        "Original": processed_df["text"].head(10),
+        "Cleaned": processed_df["clean_text"].head(10)
+    })
 
     st.dataframe(
-        stress_df.head(10),
+        preview_df,
         use_container_width=True
     )
-
-    # info dataset awal
-    c1, c2, c3 = st.columns(3)
-
-    c1.metric(
-        "Total Data",
-        len(stress_df)
-    )
-
-    c2.metric(
-        "Missing Text",
-        stress_df["text"].isnull().sum()
-    )
-
-    c3.metric(
-        "Unique Labels",
-        stress_df["label"].nunique()
-    )
-
-    st.markdown("---")
-
-    preprocess_option = st.multiselect(
-        "Choose preprocessing steps",
-        [
-            "Lowercase",
-            "Remove URL",
-            "Remove Mention",
-            "Remove Hashtag",
-            "Remove Special Characters",
-            "Tokenization",
-            "Stemming"
-        ],
-        default=[
-            "Lowercase",
-            "Remove URL",
-            "Remove Mention",
-            "Remove Hashtag",
-            "Remove Special Characters",
-            "Tokenization",
-            "Stemming"
-        ]
-    )
-
-    if st.button("🚀 Run Preprocessing"):
-
-        processed_df = stress_df.copy()
-
-        # hapus null
-        processed_df = processed_df.dropna(
-            subset=["text"]
-        )
-
-        def preprocess_pipeline(text):
-
-            text = str(text)
-
-            # lowercase
-            if "Lowercase" in preprocess_option:
-                text = text.lower()
-
-            # remove url
-            if "Remove URL" in preprocess_option:
-                text = re.sub(
-                    r"http\S+",
-                    "",
-                    text
-                )
-
-            # remove mention
-            if "Remove Mention" in preprocess_option:
-                text = re.sub(
-                    r"@\w+",
-                    "",
-                    text
-                )
-
-            # remove hashtag
-            if "Remove Hashtag" in preprocess_option:
-                text = re.sub(
-                    r"#\w+",
-                    "",
-                    text
-                )
-
-            # remove special chars
-            if "Remove Special Characters" in preprocess_option:
-                text = re.sub(
-                    r"[^a-zA-Z\s]",
-                    "",
-                    text
-                )
-
-            # tokenization
-            if "Tokenization" in preprocess_option:
-                tokens = text.split()
-            else:
-                tokens = [text]
-
-            # stemming
-            if "Stemming" in preprocess_option:
-                tokens = [
-                    stemmer.stem(word)
-                    for word in tokens
-                ]
-
-            return " ".join(tokens)
-
-        # preprocessing text
-        processed_df["clean_text"] = processed_df[
-            "text"
-        ].apply(
-            preprocess_pipeline
-        )
-
-        # simpan ke session
-        st.session_state.processed_df = processed_df
-
-        st.success(
-            "✅ Preprocessing completed successfully!"
-        )
-
-        st.markdown("---")
-
-        st.subheader("Before vs After Preprocessing")
-
-        preview_df = pd.DataFrame({
-            "Original Text": processed_df[
-                "text"
-            ].head(10),
-            "Processed Text": processed_df[
-                "clean_text"
-            ].head(10)
-        })
-
-        st.dataframe(
-            preview_df,
-            use_container_width=True
-        )
-
-        st.markdown("---")
-
-        c1, c2 = st.columns(2)
-
-        c1.metric(
-            "Ready for Training",
-            len(processed_df)
-        )
-
-        avg_len_before = processed_df[
-            "text"
-        ].apply(
-            lambda x: len(str(x).split())
-        ).mean()
-
-        avg_len_after = processed_df[
-            "clean_text"
-        ].apply(
-            lambda x: len(str(x).split())
-        ).mean()
-
-        c2.metric(
-            "Avg Tokens (After)",
-            round(avg_len_after, 2)
-        )
-
-        st.subheader("Label Distribution")
-
-        label_count = processed_df[
-            "label"
-        ].value_counts()
-
-        fig, ax = plt.subplots()
-
-        ax.bar(
-            label_count.index.astype(str),
-            label_count.values
-        )
-
-        ax.set_xlabel(
-            "Stress Level"
-        )
-
-        ax.set_ylabel(
-            "Count"
-        )
-
-        ax.set_title(
-            "Stress Label Distribution"
-        )
-
-        st.pyplot(fig)
-
-    # jika preprocessing sudah pernah dijalankan
-    elif "processed_df" in st.session_state:
-
-        st.info(
-            "Preprocessing sudah dilakukan sebelumnya."
-        )
-
-        st.dataframe(
-            st.session_state.processed_df.head(10),
-            use_container_width=True
-        )
 
 # ======================================
 # MODEL TRAINING
@@ -559,12 +339,19 @@ elif st.session_state.page == "Model Training":
         ]
     )
 
-    stress_df["clean_text"] = stress_df["text"].apply(
-        clean_text
-    )
+    # gunakan hasil preprocessing jika ada
+    if st.session_state.processed_df is not None:
+        df_train = st.session_state.processed_df
+    else:
+        df_train = stress_df.copy()
+        df_train["clean_text"] = df_train[
+            "text"
+        ].apply(
+            clean_text
+        )
 
-    X = stress_df["clean_text"]
-    y = stress_df["label"]
+    X = df_train["clean_text"]
+    y = df_train["label"]
 
     X_train, X_test, y_train, y_test = train_test_split(
         X,
@@ -607,7 +394,10 @@ elif st.session_state.page == "Model Training":
         st.session_state.vectorizer = vectorizer
 
         st.session_state.results = {
-            "accuracy": accuracy_score(y_test, y_pred),
+            "accuracy": accuracy_score(
+                y_test,
+                y_pred
+            ),
             "precision": precision_score(
                 y_test,
                 y_pred,
@@ -643,7 +433,7 @@ elif st.session_state.page == "Model Training":
         )
 
         st.success(
-            "Model berhasil dilatih"
+            "Model trained successfully"
         )
 
 # ======================================
@@ -684,7 +474,9 @@ elif st.session_state.page == "Evaluation":
             result["y_pred"]
         )
 
-        fig, ax = plt.subplots()
+        fig, ax = plt.subplots(
+            figsize=(6, 4)
+        )
 
         ax.imshow(cm)
 
@@ -696,7 +488,7 @@ elif st.session_state.page == "Evaluation":
 
     else:
         st.warning(
-            "Train model dulu"
+            "Train model terlebih dahulu"
         )
 
 # ======================================
@@ -714,13 +506,21 @@ elif st.session_state.page == "Prediction":
 
         if st.session_state.model is None:
 
-            st.session_state.model = joblib.load(
+            if os.path.exists(
                 "models/stress_model.pkl"
-            )
+            ):
+                st.session_state.model = joblib.load(
+                    "models/stress_model.pkl"
+                )
 
-            st.session_state.vectorizer = joblib.load(
-                "models/tfidf.pkl"
-            )
+                st.session_state.vectorizer = joblib.load(
+                    "models/tfidf.pkl"
+                )
+            else:
+                st.error(
+                    "Model belum tersedia. Train dulu."
+                )
+                st.stop()
 
         clean_input = clean_text(
             user_text
@@ -745,5 +545,10 @@ elif st.session_state.page == "Prediction":
             f"Prediction: {result}"
         )
 
-        st.subheader("Processed Text")
-        st.write(clean_input)
+        st.subheader(
+            "Processed Text"
+        )
+
+        st.write(
+            clean_input
+        )
