@@ -178,7 +178,7 @@ def load_datasets():
     ].astype(int)
 
     return emotion_df, stress_df
-
+emotion_df, stress_df = load_datasets()
 
 # ======================================
 # SIDEBAR
