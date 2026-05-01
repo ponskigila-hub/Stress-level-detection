@@ -2,547 +2,592 @@ import streamlit as st
 import pandas as pd
 import numpy as np
 import re
-import os
-import joblib
 import matplotlib.pyplot as plt
 import seaborn as sns
-
 from wordcloud import WordCloud
 
 from sklearn.model_selection import train_test_split
 from sklearn.pipeline import Pipeline
 from sklearn.feature_extraction.text import TfidfVectorizer
-
 from sklearn.linear_model import LogisticRegression
 from sklearn.naive_bayes import MultinomialNB
 from sklearn.svm import LinearSVC
-from sklearn.ensemble import RandomForestClassifier
-
 from sklearn.metrics import (
     accuracy_score,
+    precision_score,
+    recall_score,
+    f1_score,
     confusion_matrix,
     classification_report
 )
 
-# =====================================
+from imblearn.over_sampling import RandomOverSampler
+
+
+# ==========================================
 # PAGE CONFIG
-# =====================================
+# ==========================================
 st.set_page_config(
-    page_title="Stress Detection NLP App",
+    page_title="Stress Detection App",
     page_icon="🧠",
     layout="wide"
 )
 
-# =====================================
-# CSS
-# =====================================
+
+# ==========================================
+# CUSTOM CSS
+# ==========================================
 st.markdown("""
 <style>
+.main {
+    background-color: #0f172a;
+}
+
 [data-testid="stSidebar"] {
-    background-color: #111827;
+    background: linear-gradient(180deg, #111827, #1f2937);
 }
-h1,h2,h3{
-    color:#2563EB;
+
+[data-testid="stSidebar"] * {
+    color: white;
 }
-.stButton>button{
-    width:100%;
-    border-radius:10px;
+
+.block-container {
+    padding-top: 2rem;
+}
+
+.metric-card {
+    background: linear-gradient(135deg, #1e293b, #334155);
+    padding: 20px;
+    border-radius: 16px;
+    text-align: center;
+    border: 1px solid #475569;
+}
+
+.metric-title {
+    font-size: 15px;
+    color: #cbd5e1;
+}
+
+.metric-value {
+    font-size: 28px;
+    font-weight: bold;
+    color: white;
+}
+
+.big-card {
+    background: linear-gradient(135deg, #1d4ed8, #2563eb);
+    padding: 25px;
+    border-radius: 20px;
+    color: white;
+}
+
+.stButton button {
+    width: 100%;
+    border-radius: 12px;
+    font-weight: bold;
+}
+
+h1, h2, h3 {
+    color: #60a5fa;
 }
 </style>
 """, unsafe_allow_html=True)
 
-# =====================================
+
+# ==========================================
+# SESSION STATE
+# ==========================================
+if "emotion_model" not in st.session_state:
+    st.session_state.emotion_model = None
+
+if "stress_model" not in st.session_state:
+    st.session_state.stress_model = None
+
+
+# ==========================================
 # LOAD DATA
-# =====================================
+# ==========================================
 @st.cache_data
 def load_data():
-
-    # emotion dataset
-    df_emotion = pd.read_csv(
+    emotion_df = pd.read_csv(
         "data/emotion_accuracy_training.csv"
     )
 
-    df_emotion.columns = (
-        df_emotion.columns.str.strip()
+    emotion_df = emotion_df.rename(
+        columns={
+            "tweet": "text"
+        }
     )
 
-    # support label,text or label,tweet
-    if "tweet" in df_emotion.columns:
-        df_emotion = df_emotion.rename(
-            columns={"tweet": "text"}
-        )
-
-    # stress dataset
-    # pakai engine python agar parsing lebih fleksibel
-    df_stress = pd.read_csv(
-        "data/ugm_fess_labeled.csv",
-        engine="python",
-        sep=","
+    stress_df = pd.read_csv(
+        "data/ugm_fess_labeled.csv"
     )
 
-    df_stress.columns = (
-        df_stress.columns.str.strip()
+    label_col = [
+        c for c in stress_df.columns
+        if "label" in c.lower()
+    ][0]
+
+    stress_df = stress_df.rename(
+        columns={
+            "full_text": "text",
+            label_col: "stress_label"
+        }
     )
 
-    # handle jika header gabung
-    if "full_text,label" in df_stress.columns:
-
-        split_df = df_stress[
-            "full_text,label"
-        ].str.split(
-            ",",
-            n=1,
-            expand=True
-        )
-
-        df_stress["text"] = split_df[0]
-        df_stress["stress_label"] = split_df[1]
-
-    else:
-
-        label_col = [
-            c for c in df_stress.columns
-            if "label" in c.lower()
-        ][0]
-
-        if "full_text" in df_stress.columns:
-            df_stress = df_stress.rename(
-                columns={
-                    "full_text": "text",
-                    label_col: "stress_label"
-                }
-            )
-
-    # clean label
-    df_stress["stress_label"] = (
-        df_stress["stress_label"]
+    stress_df["stress_label"] = (
+        stress_df["stress_label"]
         .astype(str)
-        .str.replace(";", "", regex=False)
+        .str.replace(";", "")
     )
 
-    df_stress["stress_label"] = pd.to_numeric(
-        df_stress["stress_label"],
+    stress_df["stress_label"] = pd.to_numeric(
+        stress_df["stress_label"],
         errors="coerce"
     )
 
-    df_stress = df_stress.dropna(
-        subset=["text", "stress_label"]
-    )
+    stress_df = stress_df.dropna()
 
-    df_stress["stress_label"] = df_stress[
-        "stress_label"
-    ].astype(int)
-
-    return df_emotion, df_stress
+    return emotion_df, stress_df
 
 
-# =====================================
-# CLEAN TEXT
-# =====================================
+# ==========================================
+# TEXT CLEANING
+# ==========================================
 def clean_text(text):
-
     text = str(text).lower()
-
-    text = re.sub(
-        r"http\S+|www\S+",
-        "",
-        text
-    )
-
-    text = re.sub(
-        r"@\w+|#\w+",
-        "",
-        text
-    )
-
-    text = re.sub(
-        r"[^a-zA-Z\s]",
-        "",
-        text
-    )
-
+    text = re.sub(r"http\S+|www\S+", "", text)
+    text = re.sub(r"@\w+|#\w+", "", text)
+    text = re.sub(r"[^a-zA-Z\s]", "", text)
     return text.strip()
 
 
-# =====================================
+# ==========================================
 # BUILD MODEL
-# =====================================
-def build_pipeline(model_name):
+# ==========================================
+def build_model(name):
 
-    model_dict = {
-        "Logistic Regression":
-            LogisticRegression(max_iter=1000),
-
-        "Naive Bayes":
-            MultinomialNB(),
-
-        "Linear SVM":
-            LinearSVC(),
-
-        "Random Forest":
-            RandomForestClassifier()
-    }
-
-    pipeline = Pipeline([
-        (
-            "tfidf",
-            TfidfVectorizer(
-                ngram_range=(1, 2),
-                max_features=10000
-            )
-        ),
-        (
-            "clf",
-            model_dict[model_name]
+    if name == "Logistic Regression":
+        return LogisticRegression(
+            max_iter=1000,
+            class_weight="balanced"
         )
-    ])
 
-    return pipeline
+    elif name == "Naive Bayes":
+        return MultinomialNB()
+
+    elif name == "Linear SVM":
+        return LinearSVC(
+            class_weight="balanced"
+        )
 
 
-# =====================================
+# ==========================================
 # LOAD DATASET
-# =====================================
-df_emotion, df_stress = load_data()
+# ==========================================
+emotion_df, stress_df = load_data()
 
-# preprocessing
-df_emotion["clean_text"] = (
-    df_emotion["text"]
-    .apply(clean_text)
+emotion_df["clean_text"] = emotion_df["text"].apply(
+    clean_text
 )
 
-df_stress["clean_text"] = (
-    df_stress["text"]
-    .apply(clean_text)
+stress_df["clean_text"] = stress_df["text"].apply(
+    clean_text
 )
 
-# =====================================
+
+# ==========================================
 # SIDEBAR
-# =====================================
-st.sidebar.title("NLP Pipeline")
+# ==========================================
+with st.sidebar:
 
-menu = st.sidebar.radio(
-    "Navigation",
-    [
-        "EDA",
-        "Text Preprocessing",
-        "Feature Engineering",
-        "Model Training & Evaluation",
-        "Prediction Demo"
-    ]
-)
+    st.title("🧠 Stress Detection")
 
-train_ratio = st.sidebar.slider(
-    "Training Set Ratio",
-    0.6,
-    0.9,
-    0.8,
-    0.05
-)
-
-model_choice = st.sidebar.selectbox(
-    "Choose Model",
-    [
-        "Logistic Regression",
-        "Naive Bayes",
-        "Linear SVM",
-        "Random Forest"
-    ]
-)
-
-# =====================================
-# TRAIN MODEL
-# =====================================
-pipeline = build_pipeline(
-    model_choice
-)
-
-X_train, X_test, y_train, y_test = train_test_split(
-    df_emotion["clean_text"],
-    df_emotion["label"],
-    train_size=train_ratio,
-    random_state=42
-)
-
-pipeline.fit(
-    X_train,
-    y_train
-)
-
-preds = pipeline.predict(
-    X_test
-)
-
-acc = accuracy_score(
-    y_test,
-    preds
-)
-
-# stress model
-stress_pipeline = Pipeline([
-    (
-        "tfidf",
-        TfidfVectorizer(
-            ngram_range=(1, 2),
-            max_features=10000
-        )
-    ),
-    (
-        "clf",
-        LogisticRegression(
-            max_iter=1000
-        )
-    )
-])
-
-stress_pipeline.fit(
-    df_stress["clean_text"],
-    df_stress["stress_label"]
-)
-
-# save model
-os.makedirs(
-    "models",
-    exist_ok=True
-)
-
-joblib.dump(
-    pipeline,
-    "models/emotion_model.pkl"
-)
-
-joblib.dump(
-    stress_pipeline,
-    "models/stress_model.pkl"
-)
-
-# =====================================
-# EDA
-# =====================================
-if menu == "EDA":
-
-    st.title("Exploratory Data Analysis")
-
-    eda_option = st.selectbox(
-        "Select EDA",
+    page = st.radio(
+        "Navigation",
         [
-            "Dataset Preview",
-            "Emotion Distribution",
-            "Stress Distribution",
-            "Text Length Distribution",
-            "WordCloud"
+            "Home",
+            "EDA",
+            "Preprocessing",
+            "Model",
+            "Prediction"
         ]
     )
 
-    if eda_option == "Dataset Preview":
+
+# ==========================================
+# HOME
+# ==========================================
+if page == "Home":
+
+    st.title("🧠 Stress Detection NLP App")
+
+    st.markdown("""
+    <div class="big-card">
+        Detect emotion and stress level from social media text
+        using Natural Language Processing and Machine Learning.
+    </div>
+    """, unsafe_allow_html=True)
+
+    st.write("")
+
+    c1, c2 = st.columns(2)
+
+    with c1:
+        st.markdown(f"""
+        <div class="metric-card">
+            <div class="metric-title">Emotion Dataset</div>
+            <div class="metric-value">{len(emotion_df)}</div>
+        </div>
+        """, unsafe_allow_html=True)
+
+    with c2:
+        st.markdown(f"""
+        <div class="metric-card">
+            <div class="metric-title">Stress Dataset</div>
+            <div class="metric-value">{len(stress_df)}</div>
+        </div>
+        """, unsafe_allow_html=True)
+
+
+# ==========================================
+# EDA
+# ==========================================
+elif page == "EDA":
+
+    st.title("📊 Exploratory Data Analysis")
+
+    tab1, tab2, tab3 = st.tabs([
+        "Emotion Dataset",
+        "Stress Dataset",
+        "WordCloud"
+    ])
+
+    with tab1:
         st.dataframe(
-            df_emotion.head(20)
+            emotion_df.head()
         )
-
-    elif eda_option == "Emotion Distribution":
 
         fig, ax = plt.subplots()
 
-        df_emotion["label"].value_counts().plot(
+        emotion_df["label"].value_counts().plot(
             kind="bar",
             ax=ax
         )
 
+        ax.set_title(
+            "Emotion Distribution"
+        )
+
         st.pyplot(fig)
 
-    elif eda_option == "Stress Distribution":
+    with tab2:
+        st.dataframe(
+            stress_df.head()
+        )
 
         fig, ax = plt.subplots()
 
-        df_stress["stress_label"].value_counts().plot(
+        stress_df["stress_label"].value_counts().plot(
             kind="bar",
             ax=ax
         )
 
-        st.pyplot(fig)
-
-    elif eda_option == "Text Length Distribution":
-
-        df_emotion["length"] = (
-            df_emotion["text"]
-            .apply(len)
-        )
-
-        fig, ax = plt.subplots()
-
-        sns.histplot(
-            df_emotion["length"],
-            kde=True,
-            ax=ax
+        ax.set_title(
+            "Stress Distribution"
         )
 
         st.pyplot(fig)
 
-    elif eda_option == "WordCloud":
-
+    with tab3:
         text = " ".join(
-            df_emotion["text"]
+            emotion_df["text"]
         )
 
         wc = WordCloud(
-            width=1000,
+            width=1200,
             height=500
         ).generate(text)
 
-        fig, ax = plt.subplots()
+        fig, ax = plt.subplots(
+            figsize=(15,5)
+        )
 
         ax.imshow(wc)
         ax.axis("off")
 
         st.pyplot(fig)
 
-# =====================================
+
+# ==========================================
 # PREPROCESSING
-# =====================================
-elif menu == "Text Preprocessing":
+# ==========================================
+elif page == "Preprocessing":
 
-    st.title("Text Preprocessing")
+    st.title("⚙ Text Preprocessing")
 
-    sample_size = st.slider(
-        "Sample Rows",
-        5,
-        50,
+    sample = emotion_df.sample(
         10
-    )
+    ).copy()
 
-    sample = df_emotion[
-        ["text"]
-    ].sample(sample_size)
-
-    sample["cleaned"] = (
-        sample["text"]
-        .apply(clean_text)
-    )
-
-    st.dataframe(sample)
-
-# =====================================
-# FEATURE ENGINEERING
-# =====================================
-elif menu == "Feature Engineering":
-
-    st.title("Feature Engineering")
-
-    tfidf = pipeline.named_steps["tfidf"]
-
-    features = tfidf.fit_transform(
-        df_emotion["clean_text"]
-    )
-
-    feature_names = tfidf.get_feature_names_out()[:30]
-
-    st.subheader("Top 30 TF-IDF Features")
-
-    st.write(feature_names)
-
-# =====================================
-# MODEL EVALUATION
-# =====================================
-elif menu == "Model Training & Evaluation":
-
-    st.title("Model Evaluation")
-
-    st.metric(
-        "Accuracy",
-        f"{acc:.2%}"
-    )
-
-    st.subheader(
-        "Classification Report"
-    )
-
-    report = classification_report(
-        y_test,
-        preds,
-        output_dict=True
-    )
+    preview_df = pd.DataFrame({
+        "Original Text": sample["text"],
+        "Cleaned Text": sample["clean_text"]
+    })
 
     st.dataframe(
-        pd.DataFrame(report).transpose()
+        preview_df,
+        use_container_width=True
     )
 
-    st.subheader(
-        "Confusion Matrix"
+
+# ==========================================
+# MODEL
+# ==========================================
+elif page == "Model":
+
+    st.title("🤖 Model Training")
+
+    model_name = st.selectbox(
+        "Choose Model",
+        [
+            "Logistic Regression",
+            "Naive Bayes",
+            "Linear SVM"
+        ]
     )
 
-    cm = confusion_matrix(
-        y_test,
-        preds
-    )
+    if st.button("Train Model"):
 
-    fig, ax = plt.subplots()
+        # Emotion
+        X_emotion = emotion_df["clean_text"]
+        y_emotion = emotion_df["label"]
 
-    sns.heatmap(
-        cm,
-        annot=True,
-        fmt="d",
-        ax=ax
-    )
+        X_train_e, X_test_e, y_train_e, y_test_e = train_test_split(
+            X_emotion,
+            y_emotion,
+            test_size=0.2,
+            random_state=42
+        )
 
-    st.pyplot(fig)
+        emotion_pipeline = Pipeline([
+            (
+                "tfidf",
+                TfidfVectorizer(
+                    max_features=10000
+                )
+            ),
+            (
+                "clf",
+                build_model(model_name)
+            )
+        ])
 
-# =====================================
-# PREDICTION DEMO
-# =====================================
-elif menu == "Prediction Demo":
+        emotion_pipeline.fit(
+            X_train_e,
+            y_train_e
+        )
 
-    st.title("Prediction Demo")
+        pred_emotion = emotion_pipeline.predict(
+            X_test_e
+        )
+
+        # Stress
+        X_stress = stress_df["clean_text"]
+        y_stress = stress_df["stress_label"]
+
+        tfidf = TfidfVectorizer(
+            max_features=10000
+        )
+
+        X_vec = tfidf.fit_transform(
+            X_stress
+        )
+
+        ros = RandomOverSampler(
+            random_state=42
+        )
+
+        X_resampled, y_resampled = ros.fit_resample(
+            X_vec,
+            y_stress
+        )
+
+        X_train_s, X_test_s, y_train_s, y_test_s = train_test_split(
+            X_resampled,
+            y_resampled,
+            test_size=0.2,
+            random_state=42
+        )
+
+        stress_model = build_model(
+            model_name
+        )
+
+        stress_model.fit(
+            X_train_s,
+            y_train_s
+        )
+
+        pred_stress = stress_model.predict(
+            X_test_s
+        )
+
+        st.session_state.emotion_model = emotion_pipeline
+        st.session_state.stress_model = (
+            stress_model,
+            tfidf
+        )
+
+        st.success(
+            "Training Completed"
+        )
+
+        # Metrics
+        c1, c2, c3, c4 = st.columns(4)
+
+        c1.metric(
+            "Accuracy",
+            round(
+                accuracy_score(
+                    y_test_s,
+                    pred_stress
+                ),
+                3
+            )
+        )
+
+        c2.metric(
+            "Precision",
+            round(
+                precision_score(
+                    y_test_s,
+                    pred_stress,
+                    average="weighted"
+                ),
+                3
+            )
+        )
+
+        c3.metric(
+            "Recall",
+            round(
+                recall_score(
+                    y_test_s,
+                    pred_stress,
+                    average="weighted"
+                ),
+                3
+            )
+        )
+
+        c4.metric(
+            "F1 Score",
+            round(
+                f1_score(
+                    y_test_s,
+                    pred_stress,
+                    average="weighted"
+                ),
+                3
+            )
+        )
+
+        st.subheader(
+            "Confusion Matrix"
+        )
+
+        fig, ax = plt.subplots(
+            figsize=(8,6)
+        )
+
+        cm = confusion_matrix(
+            y_test_s,
+            pred_stress
+        )
+
+        sns.heatmap(
+            cm,
+            annot=True,
+            fmt="d",
+            cmap="Blues"
+        )
+
+        st.pyplot(fig)
+
+        st.subheader(
+            "Classification Report"
+        )
+
+        report = classification_report(
+            y_test_s,
+            pred_stress,
+            output_dict=True
+        )
+
+        st.dataframe(
+            pd.DataFrame(report).transpose()
+        )
+
+
+# ==========================================
+# PREDICTION
+# ==========================================
+elif page == "Prediction":
+
+    st.title("🔮 Stress Prediction")
 
     user_input = st.text_area(
-        "Input social media text"
+        "Input text here"
     )
 
     if st.button("Predict"):
 
-        cleaned = clean_text(
-            user_input
-        )
+        if (
+            st.session_state.emotion_model is None
+            or
+            st.session_state.stress_model is None
+        ):
+            st.warning(
+                "Train model first"
+            )
 
-        emotion_pred = pipeline.predict(
-            [cleaned]
-        )[0]
+        else:
+            cleaned = clean_text(
+                user_input
+            )
 
-        stress_proba = stress_pipeline.predict_proba(
-            [cleaned]
-        )[0]
+            emotion_pred = (
+                st.session_state.emotion_model
+                .predict([cleaned])[0]
+            )
 
-        stress_percentage = round(
-            max(stress_proba) * 100,
-            2
-        )
+            stress_model, tfidf = (
+                st.session_state.stress_model
+            )
 
-        stress_level = np.argmax(
-            stress_proba
-        )
+            stress_vec = tfidf.transform(
+                [cleaned]
+            )
 
-        stress_map = {
-            0: "Low Stress",
-            1: "Medium Stress",
-            2: "High Stress"
-        }
+            stress_pred = stress_model.predict(
+                stress_vec
+            )[0]
 
-        st.success(
-            f"Emotion: {emotion_pred}"
-        )
+            stress_map = {
+                0: "Normal 😌",
+                1: "Mild Stress 😥",
+                2: "High Stress 😫"
+            }
 
-        st.warning(
-            f"Stress Level: {stress_map[stress_level]}"
-        )
+            c1, c2 = st.columns(2)
 
-        st.info(
-            f"Stress Percentage: {stress_percentage}%"
-        )
+            with c1:
+                st.success(
+                    f"Emotion: {emotion_pred}"
+                )
 
-        fig, ax = plt.subplots()
-
-        ax.bar(
-            ["Low", "Medium", "High"],
-            stress_proba
-        )
-
-        st.pyplot(fig)
+            with c2:
+                st.warning(
+                    f"Stress: {stress_map[stress_pred]}"
+                )
