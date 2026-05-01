@@ -1,7 +1,8 @@
 streamlit
 pandas
 numpy
-scikit-learn
 matplotlib
 seaborn
 wordcloud
+scikit-learn
+imbalanced-learn
